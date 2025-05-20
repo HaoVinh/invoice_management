@@ -2,6 +2,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:get/get.dart';
+import 'package:invoice_management/constants/colors.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '/screens/auth_screen/core/auth_bloc.dart';
 import 'package:velocity_x/velocity_x.dart';
@@ -132,48 +133,23 @@ class _AuthScreenState extends State<AuthScreen> {
     super.dispose();
   }
 
-    @override
-    Widget build(BuildContext context) {
-      return BlocListener<AuthBloc, AuthState>(
-        listener: (context, state) {
-          if (state is LoadingAuthState) {
-            Get.dialog(
-              const Center(
-                child: CircularProgressIndicator(),
-              ),
-              barrierDismissible: false,
-            );
-          } else if (state is FailureAuthState) {
-            Get.back();
-            Get.snackbar(
-                "Thông báo", "Đăng nhập thất bại.\nLý do: ${state.error}",
-                snackPosition: SnackPosition.BOTTOM,
-                backgroundColor: Colors.green,
-                colorText: Colors.white,
-                margin: const EdgeInsets.all(10),
-                borderRadius: 10,
-                snackStyle: SnackStyle.FLOATING,
-                animationDuration: const Duration(milliseconds: 300),
-                duration: const Duration(seconds: 2),
-                icon: const Icon(
-                  Icons.info,
-                  color: Colors.white,
-                ),
-                mainButton: TextButton(
-                  onPressed: () {
-                    Get.back();
-                  },
-                  child: const Icon(
-                    Icons.close,
-                    color: Colors.white,
-                  ),
-                ));
-          } else if (state.auth != null) {
-            Get.snackbar(
-              "Thông báo",
-              "Đăng nhập thành công",
+  @override
+  Widget build(BuildContext context) {
+    return BlocListener<AuthBloc, AuthState>(
+      listener: (context, state) {
+        if (state is LoadingAuthState) {
+          Get.dialog(
+            const Center(
+              child: CircularProgressIndicator(color: Colors.red),
+            ),
+            barrierDismissible: false,
+          );
+        } else if (state is FailureAuthState) {
+          Get.back();
+          Get.snackbar(
+              "Thông báo", "Đăng nhập thất bại.\nLý do: ${state.error}",
               snackPosition: SnackPosition.BOTTOM,
-              backgroundColor: Colors.green,
+              backgroundColor: Colors.red,
               colorText: Colors.white,
               margin: const EdgeInsets.all(10),
               borderRadius: 10,
@@ -185,95 +161,106 @@ class _AuthScreenState extends State<AuthScreen> {
                 color: Colors.white,
               ),
               mainButton: TextButton(
-                onPressed: () {
-                  Get.back();
-                },
+                onPressed: () => Get.back(),
                 child: const Icon(
                   Icons.close,
                   color: Colors.white,
                 ),
+              ));
+        } else if (state.auth != null) {
+          Get.snackbar(
+            "Thông báo",
+            "Đăng nhập thành công",
+            snackPosition: SnackPosition.BOTTOM,
+            backgroundColor: Colors.green,
+            colorText: Colors.white,
+            margin: const EdgeInsets.all(10),
+            borderRadius: 10,
+            snackStyle: SnackStyle.FLOATING,
+            animationDuration: const Duration(milliseconds: 300),
+            duration: const Duration(seconds: 2),
+            icon: const Icon(
+              Icons.info,
+              color: Colors.white,
+            ),
+            mainButton: TextButton(
+              onPressed: () => Get.back(),
+              child: const Icon(
+                Icons.close,
+                color: Colors.white,
               ),
-              snackbarStatus: (status) {
-                if (status == SnackbarStatus.CLOSED) {
-                  Get.offAllNamed(ChooseStoreScreen.routeName);
-                }
-              },
-            );
-          }
-        },
-        child: Scaffold(
-          body: WillPopScope(
-            onWillPop: () => handleWillPop(),
-            child: SingleChildScrollView(
-
-              child: Container(
-                height: context.screenHeight,
-                constraints: const BoxConstraints(
-                  minHeight: 600,
-                ),
-                decoration: const BoxDecoration(
-                  //shadow light
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      Color(0xFFFFFFFF),
-                      Color(0xFFFFFFFF),
-                      Color(0xFF8CB68D),
-                    ],
-                  ),
-                ),
-                //padding.top
-                padding: EdgeInsets.symmetric(
-                    horizontal: 20, vertical: MediaQuery.of(context).padding.top),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 20),
-                    Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          GestureDetector(
-                            onTap: () => isSignIn ? changeLayout() : null,
-                            child: Text(
-                              'Đăng nhập',
-                              style: TextStyle(
-                                fontSize: isSignIn ? 20 : 30,
-                                fontWeight: FontWeight.bold,
-                                color: isSignIn ? Colors.grey : kPrimaryColor,
-                              ),
-                            ),
-                          ),
-                          GestureDetector(  
-                            onTap: () => isSignIn ? null : changeLayout(),
-                            child: Text(
-                              'Đăng ký',
-                              style: TextStyle(
-                                fontSize: isSignIn ? 30 : 20,
-                                fontWeight: FontWeight.bold,
-                                color: isSignIn ? kPrimaryColor : Colors.grey,
-                              ),
-                            ),
-                          ),
-                        ]),
-                    const SizedBox(height: 20),
-                    IndexedStack(
-                      index: isSignIn ? 1 : 0,
-                      children: [_signInView(context), _signUpView(context)],
-                    ),
+            ),
+          );
+        }
+      },
+      child: Scaffold(
+        body: WillPopScope(
+          onWillPop: () => handleWillPop(),
+          child: SingleChildScrollView(
+            child: Container(
+              height: context.screenHeight,
+              constraints: const BoxConstraints(minHeight: 600),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFFFFFFFF),
+                    Color(0xFFFFE6E6),
+                    appColor,
                   ],
                 ),
+              ),
+              padding: EdgeInsets.symmetric(
+                  horizontal: 20, vertical: MediaQuery.of(context).padding.top),
+              child: Column(
+                children: [
+                  const SizedBox(height: 20),
+                  Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        GestureDetector(
+                          onTap: () => isSignIn ? changeLayout() : null,
+                          child: Text(
+                            'Đăng nhập',
+                            style: TextStyle(
+                              fontSize: isSignIn ? 20 : 30,
+                              fontWeight: FontWeight.bold,
+                              color: isSignIn ? Colors.grey : Colors.red[700],
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => isSignIn ? null : changeLayout(),
+                          child: Text(
+                            'Đăng ký',
+                            style: TextStyle(
+                              fontSize: isSignIn ? 30 : 20,
+                              fontWeight: FontWeight.bold,
+                              color: isSignIn ? Colors.red[700] : Colors.grey,
+                            ),
+                          ),
+                        ),
+                      ]),
+                  const SizedBox(height: 20),
+                  IndexedStack(
+                    index: isSignIn ? 1 : 0,
+                    children: [_signInView(context), _signUpView(context)],
+                  ),
+                ],
               ),
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
+  }
 
   _signInView(BuildContext context) {
     return Column(
       children: [
         const Text(
-          'Xin chào! Bạn đã đăng xuất. \nHãy đăng nhập để tiếp tục.',
+          'Xin chào!\nHãy đăng nhập để tiếp tục.',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
@@ -287,7 +274,7 @@ class _AuthScreenState extends State<AuthScreen> {
           controller: _usernameController,
           prefixIcon: Container(
             padding: const EdgeInsets.all(10),
-            child: const Icon(Icons.person),
+            child: const Icon(Icons.person, color: Colors.red),
           ),
         ),
         20.heightBox,
@@ -296,7 +283,7 @@ class _AuthScreenState extends State<AuthScreen> {
           controller: _passwordController,
           prefixIcon: Container(
             padding: const EdgeInsets.all(10),
-            child: const Icon(Icons.lock),
+            child: const Icon(Icons.lock, color: Colors.red),
           ),
           obscureText: true,
         ),
@@ -304,7 +291,7 @@ class _AuthScreenState extends State<AuthScreen> {
         CustomButton(
           text: 'Đăng nhập',
           onPressed: () => handleLogin(),
-          color: kPrimaryColor,
+          color: Colors.red,
           textColor: Colors.white,
           width: double.infinity,
           height: 50,
@@ -315,21 +302,8 @@ class _AuthScreenState extends State<AuthScreen> {
           isOutline: false,
           isDisabled: false,
         ),
-          const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              'Quên mật khẩu?',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.normal,
-                color: kPrimaryColor.withOpacity(0.8),
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ],
-        ),
+        const SizedBox(height: 20),
+
       ],
     );
   }
@@ -359,13 +333,14 @@ class _AuthScreenState extends State<AuthScreen> {
         const TextField(
           decoration: InputDecoration(
             hintText: 'Email',
-            hintStyle: TextStyle(
-              color: Colors.grey,
-            ),
+            hintStyle: TextStyle(color: Colors.grey),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.all(
-                Radius.circular(8),
-              ),
+              borderRadius: BorderRadius.all(Radius.circular(8)),
+            ),
+            prefixIcon: Icon(Icons.email, color: Colors.red),
+            focusedBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Colors.red),
+              borderRadius: BorderRadius.all(Radius.circular(8)),
             ),
           ),
         ),
@@ -373,13 +348,14 @@ class _AuthScreenState extends State<AuthScreen> {
         const TextField(
           decoration: InputDecoration(
             hintText: 'Mật khẩu',
-            hintStyle: TextStyle(
-              color: Colors.grey,
-            ),
+            hintStyle: TextStyle(color: Colors.grey),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.all(
-                Radius.circular(8),
-              ),
+              borderRadius: BorderRadius.all(Radius.circular(8)),
+            ),
+            prefixIcon: Icon(Icons.lock, color: Colors.red),
+            focusedBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Colors.red),
+              borderRadius: BorderRadius.all(Radius.circular(8)),
             ),
           ),
         ),
@@ -387,13 +363,14 @@ class _AuthScreenState extends State<AuthScreen> {
         const TextField(
           decoration: InputDecoration(
             hintText: 'Nhập lại mật khẩu',
-            hintStyle: TextStyle(
-              color: Colors.grey,
-            ),
+            hintStyle: TextStyle(color: Colors.grey),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.all(
-                Radius.circular(8),
-              ),
+              borderRadius: BorderRadius.all(Radius.circular(8)),
+            ),
+            prefixIcon: Icon(Icons.lock, color: Colors.red),
+            focusedBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Colors.red),
+              borderRadius: BorderRadius.all(Radius.circular(8)),
             ),
           ),
         ),
@@ -401,7 +378,7 @@ class _AuthScreenState extends State<AuthScreen> {
         CustomButton(
           text: 'Đăng ký',
           onPressed: () {},
-          color: kPrimaryColor,
+          color: Colors.red,
           textColor: Colors.white,
           width: double.infinity,
           height: 50,

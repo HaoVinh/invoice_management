@@ -1,8 +1,8 @@
 //create route settings
 
 import 'package:flutter/material.dart';
+import 'package:invoice_management/screens/invoice_screen/screens/invoice_screen.dart';
 
-import '../screens/check_sheet_products_screen/model/product_dto.dart';
 import '../screens/screens.dart';
 
 class RouteSettingsWithArguments extends RouteSettings {
@@ -22,16 +22,12 @@ class RouteSettingsWithArguments extends RouteSettings {
     switch (settings.name) {
       case AuthScreen.routeName:
         return MaterialPageRoute(builder: (_) => const AuthScreen());
-      case ChooseStoreScreen.routeName:
-        return MaterialPageRoute(builder: (_) => const ChooseStoreScreen());
-      case CheckSheetProductsScreen.routeName:
-        return MaterialPageRoute(
-            builder: (_) => CheckSheetProductsScreen(
-                  branchId: settings.arguments as int,
-                ));
       case CheckingLoginPage.routeName:
         return MaterialPageRoute(builder: (_) => const CheckingLoginPage());
-
+      case HomeInvoiceScreen.routeName:
+        return MaterialPageRoute(builder: (_) => const HomeInvoiceScreen());
+      case InvoiceTempScreen.routeName:
+        return MaterialPageRoute(builder: (_) => const InvoiceTempScreen());
 
       default:
         return MaterialPageRoute(

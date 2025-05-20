@@ -16,7 +16,7 @@ abstract class AbstractRepository {
 
     _dio = Dio(options);
     _dio.interceptors.add(LoggingInterceptor());
-    baseURL = env.baseUrl!;
+    baseURL = env.baseUrl;
   }
 
   Future<Response> get(
@@ -24,16 +24,16 @@ abstract class AbstractRepository {
       String? token,
       String? finalUrl,
       Map<String, dynamic>? queryParameters,
-      int? branchId}) async {
+      }) async {
     final String _url = finalUrl ?? baseURL;
     try {
       return await _dio.get(
         _url + url,
         options: Options(
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json; charset=utf-8',
             if (token != null) "Authorization": "Bearer $token",
-            if (branchId != null) "BranchId": branchId,
+
           },
         ),
         queryParameters: queryParameters,
@@ -50,7 +50,7 @@ abstract class AbstractRepository {
       String? finalUrl,
       dynamic data,
       String? token,
-      int? branchId}) async {
+     }) async {
     final String _url = finalUrl ?? baseURL;
     try {
       return await _dio.post(
@@ -58,9 +58,9 @@ abstract class AbstractRepository {
         data: data,
         options: Options(
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json; charset=utf-8',
             if (token != null) "Authorization": "Bearer $token",
-            if (branchId != null) "BranchId": branchId,
+
           },
         ),
       );
@@ -76,7 +76,7 @@ abstract class AbstractRepository {
       String? finalUrl,
       dynamic data,
       String? token,
-      int? branchId}) async {
+     }) async {
     final String _url = finalUrl ?? baseURL;
     try {
       return await _dio.put(
@@ -84,9 +84,9 @@ abstract class AbstractRepository {
         data: data,
         options: Options(
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json; charset=utf-8',
             if (token != null) "Authorization": "Bearer $token",
-            if (branchId != null) "BranchId": branchId,
+
           },
         ),
       );
@@ -101,16 +101,15 @@ abstract class AbstractRepository {
       {required String url,
       String? finalUrl,
       String? token,
-      int? branchId}) async {
+    }) async {
     final String _url = finalUrl ?? baseURL;
     try {
       return await _dio.delete(
         (_url + url),
         options: Options(
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json; charset=utf-8',
             if (token != null) "Authorization": "Bearer $token",
-            if (branchId != null) "BranchId": branchId,
           },
         ),
       );

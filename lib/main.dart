@@ -7,13 +7,12 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:invoice_management/screens/check_sheet_products_screen/core/check_expires/check_expires_cubit.dart';
+import 'package:invoice_management/screens/invoice_screen/core/invoice_detail_temp_bloc.dart';
+import 'package:invoice_management/screens/invoice_screen/core/invoice_temp_bloc.dart';
+import 'package:invoice_management/screens/invoice_screen/repository/invoice_detail_temp_repository.dart';
+import 'package:invoice_management/screens/invoice_screen/repository/invoice_temp_repository.dart';
 import '/screens/auth_screen/repository/auth_repostory.dart';
-import '/screens/check_sheet_products_screen/core/check_sheet/check_sheet_cubit.dart';
-import '/screens/check_sheet_products_screen/core/detail_bloc/product_bloc.dart';
-import '/screens/check_sheet_products_screen/core/search_products/search_products_cubit.dart';
-import '/screens/check_sheet_products_screen/repository/check_sheet_repository.dart';
-import '/screens/check_sheet_products_screen/repository/product_repository.dart';
+
 import 'package:url_strategy/url_strategy.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -47,29 +46,29 @@ Future<void> main() async {
   // runApp(
   //   DevicePreview(
   //     enabled: !kReleaseMode,
-  //     builder: (context) => const StoreManagementApp(), // Wrap your app
+  //     builder: (context) => const InvoiceManagementApp(), // Wrap your app
   //   ),
   // );
-  runApp(const StoreManagementApp());
+  runApp(const InvoiceManagementApp());
   // runApp(
   //   DevicePreview(
   //     enabled: !kReleaseMode,
   //     // tools: const [
   //     //   ...DevicePreview.defaultTools,
   //     // ],
-  //     child: const StoreManagementApp(),
+  //     child: const InvoiceManagementApp(),
   //   ),
   // );
 }
 
-class StoreManagementApp extends StatefulWidget {
-  const StoreManagementApp({Key? key}) : super(key: key);
+class InvoiceManagementApp extends StatefulWidget {
+  const InvoiceManagementApp({Key? key}) : super(key: key);
 
   @override
-  State<StoreManagementApp> createState() => _StoreManagementAppState();
+  State<InvoiceManagementApp> createState() => _InvoiceManagementAppState();
 }
 
-class _StoreManagementAppState extends State<StoreManagementApp> {
+class _InvoiceManagementAppState extends State<InvoiceManagementApp> {
   Timer? _timer;
 
   @override
@@ -89,7 +88,7 @@ class _StoreManagementAppState extends State<StoreManagementApp> {
       }
 
       if (results.contains(ConnectivityResult.none)) {
-        _showToast('Không có kết nối mạng');
+        _showToast('Không có  nối mạng');
         _timer = Timer.periodic(const Duration(seconds: 5),
                 (t) => _showToast('Không có kết nối mạng'));
       } else {
@@ -123,20 +122,15 @@ class _StoreManagementAppState extends State<StoreManagementApp> {
         ),
         BlocProvider(
           create: (context) =>
-              ProductBloc(ProductRepository(), CheckSheetRepository()),
+              InvoiceTempBloc(InvoiceTempRepository()),
         ),
         BlocProvider(
-          create: (context) => SearchProductsCubit(ProductRepository()),
-        ),
-        BlocProvider(
-          create: (context) => CheckExpiresCubit(ProductRepository()),
-        ),
-        BlocProvider(
-          create: (context) => CheckSheetCubit(CheckSheetRepository()),
+          create: (context) =>
+              InvoiceDetailTempBloc(InvoiceDetailTempRepository()),
         ),
       ],
       child: GetMaterialApp(
-        title: 'Tồn kho KiotLix',
+        title: 'Đơn hàng LIX',
         debugShowCheckedModeBanner: false,
         themeMode: ThemeMode.light,
         theme: ThemeData(
@@ -149,7 +143,7 @@ class _StoreManagementAppState extends State<StoreManagementApp> {
           visualDensity: VisualDensity.adaptivePlatformDensity,
         ),
         darkTheme: ThemeData.dark(),
-        initialRoute: CheckingLoginPage.routeName,
+        initialRoute: HomeInvoiceScreen.routeName,
         onGenerateRoute: RouteSettingsWithArguments.generateRoute,
       ),
     );

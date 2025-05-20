@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:get/get.dart';
+import 'package:invoice_management/constants/colors.dart';
 import '/constants/contains.dart';
 import '/screens/screens.dart';
 
@@ -56,13 +57,11 @@ class _CheckingLoginPageState extends State<CheckingLoginPage> with TickerProvid
             Get.toNamed(CheckingLoginPage.routeName); // nếu đang đăng nhập, chuyển đến màn hình chọn cửa hàng
           } else if ( state is LogOutAuthState ){
             Get.offAllNamed(AuthScreen.routeName); // nếu đăng xuất, chuyển đến màn hình đăng nhập
-          } else if (state.auth != null) {
-            Get.offAllNamed(ChooseStoreScreen.routeName); // nếu đăng nhập thành công, chuyển đến màn hình chọn cửa hàng
           }
         });
       },
       child: Scaffold(
-        backgroundColor: kPrimaryColor,
+        backgroundColor: appColor,
         body: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.center,
