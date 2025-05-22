@@ -23,6 +23,8 @@ class InvoiceTempDto{
    String voucher_code;
    int? orderId;
    List<InvoiceDetailTempDto>? invoiceDetailTemps;
+   bool exported ;
+   bool isSaved;
 
 
 
@@ -45,7 +47,9 @@ class InvoiceTempDto{
     required this.delivery_date,
     required this.voucher_code,
       this.invoiceDetailTemps,
-    this.orderId
+    this.orderId,
+    required this.exported,
+    required this.isSaved,
   });
 
 
@@ -76,6 +80,8 @@ class InvoiceTempDto{
        invoiceDetailTemps: (json['invoiceDetailTemps'] as List<dynamic>?)
            ?.map((e) => InvoiceDetailTempDto.fromJson(e))
            .toList(),
+       exported: json['exported'],
+       isSaved: json['isSaved'],
      );
    }
    Map<String, dynamic> toJson() {
@@ -100,6 +106,8 @@ class InvoiceTempDto{
        'voucher_code': voucher_code,
        'orderId': orderId,
        'invoiceDetailTemps': invoiceDetailTemps?.map((e) => e.toJson()).toList(),
+       'exported': exported,
+       'isSaved': isSaved,
      };
    }
    InvoiceTempDto copyWith({
@@ -121,6 +129,8 @@ class InvoiceTempDto{
      required DateTime delivery_date,
      required String voucher_code,
      int? orderId,
+     required bool exported ,
+     required bool isSaved,
    }) {
      return InvoiceTempDto(
        idInvoice: idInvoice ?? this.idInvoice,
@@ -141,6 +151,8 @@ class InvoiceTempDto{
        delivery_date: delivery_date,
        voucher_code:  voucher_code,
        orderId: orderId,
+       exported: exported,
+       isSaved: isSaved,
      );
    }
 

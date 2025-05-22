@@ -149,14 +149,14 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
             elevation: 8,
             title: Row(
               children: [
-                const Icon(Icons.search, color: appColor, size: 24),
+                const Icon(Icons.search, color: Colors.blueAccent, size: 24),
                 const SizedBox(width: 8),
                 Text(
                   'Tìm kiếm phiếu tạm',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: appColor,
+                    color:  Colors.blueAccent,
                   ),
                 ),
               ],
@@ -185,7 +185,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                           label: Text(
                             'Từ: ${DateFormat('dd/MM/yyyy').format(selectedStartDate)}',
                             style: const TextStyle(
-                                fontSize: 14, color: Colors.black87),
+                                fontSize: 10, color: Colors.black87),
                           ),
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(
@@ -214,7 +214,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                           label: Text(
                             'Đến: ${DateFormat('dd/MM/yyyy').format(selectedEndDate)}',
                             style: const TextStyle(
-                                fontSize: 14, color: Colors.black87),
+                                fontSize: 10, color: Colors.black87),
                           ),
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(
@@ -237,18 +237,28 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                 child: Text(
                   'Hủy',
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 10,
                     color: Colors.grey.shade600,
                   ),
                 ),
               ),
               Container(
                 decoration: BoxDecoration(
-                  color: appColor,
+                  color:  Colors.blueAccent,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: ElevatedButton(
                   onPressed: () {
+                    if (selectedStartDate.isAfter(selectedEndDate)) {
+                      Get.snackbar(
+                        'Lỗi',
+                        'Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.',
+                        snackPosition: SnackPosition.BOTTOM,
+                        backgroundColor: Colors.red,
+                        colorText: Colors.white,
+                      );
+                      return;
+                    }
                     Navigator.of(dialogContext).pop();
                     // Sử dụng blocContext để truy cập InvoiceTempBloc
                     blocContext.read<InvoiceTempBloc>().add(FetchInvoiceTempsEvent(
@@ -261,7 +271,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 10),
                     textStyle:
-                    const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                    const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
                     backgroundColor: Colors.transparent,
                     shadowColor: Colors.transparent,
                     shape: RoundedRectangleBorder(
@@ -291,123 +301,118 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
     super.dispose();
   }
 
+
+
+
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (context) => InvoiceTempBloc(InvoiceTempRepository())
-        ..add(FetchInvoiceTempsEvent(
-          cm: 'list_invoice_temps',
-          sDate: DateFormat('dd/MM/yyyy').format(selectedStartDate),
-          eDate: DateFormat('dd/MM/yyyy').format(selectedEndDate),
-        )),
-      child: WillPopScope(
-        onWillPop: _handleWillPop,
-        child: Scaffold(
-          appBar: AppBar(
-            backgroundColor: appColor,
-            foregroundColor: primaryColor,
-            title: const Text('Danh sách phiếu'),
-            actions: [
-              Builder(
-                builder: (BuildContext innerContext) {
-                  return IconButton(
-                    icon: const Icon(Icons.search),
-                    onPressed: () {
-                      _showSearchDialog(innerContext);
-                    },
-                  );
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.logout),
-                onPressed: _handleLogout,
-              ),
-            ],
-          ),
-          body: BlocListener<InvoiceTempBloc, InvoiceTempState>(
-            listener: (context, state) {
-              if (state is InvoiceTempError) {
-                Get.snackbar(
-                  'Lỗi',
-                  'Không thể tải dữ liệu: ${state.message}',
-                  snackPosition: SnackPosition.BOTTOM,
-                  backgroundColor: Colors.red,
-                  colorText: Colors.white,
-                );
-              } else if (state is InvoiceTempLoaded && state.invoiceTemps.isEmpty) {
-                Get.snackbar(
-                  'Thông báo',
-                  'Không có phiếu nào trong khoảng thời gian từ ${DateFormat('dd/MM/yyyy').format(selectedStartDate)} đến ${DateFormat('dd/MM/yyyy').format(selectedEndDate)}',
-                  snackPosition: SnackPosition.BOTTOM,
-                  backgroundColor: Colors.orange,
-                  colorText: Colors.white,
-                );
-              }
-            },
-            child: BlocBuilder<InvoiceTempBloc, InvoiceTempState>(
-              builder: (context, state) {
-                return _buildBody(context, state);
-              },
-            ),
-          ),
-        ),
-      ),
-    );
+  return BlocProvider(
+  create: (context) => InvoiceTempBloc(InvoiceTempRepository())
+  ..add(FetchInvoiceTempsEvent(
+  cm: 'list_invoice_temps',
+  sDate: DateFormat('dd/MM/yyyy').format(selectedStartDate),
+  eDate: DateFormat('dd/MM/yyyy').format(selectedEndDate),
+  )),
+  child: WillPopScope(
+  onWillPop: _handleWillPop,
+  child: Scaffold(
+  appBar: AppBar(
+  elevation: 2,
+  backgroundColor: Colors.blueAccent,
+  foregroundColor: Colors.white,
+  title: const Text(
+  'Danh sách phiếu',
+  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500),
+  ),
+  actions: [
+  Builder(
+  builder: (BuildContext innerContext) {
+  return Tooltip(
+  message: 'Tìm kiếm',
+  child: IconButton(
+  icon: const Icon(Icons.search, size: 24),
+  onPressed: () => _showSearchDialog(innerContext),
+  ),
+  );
+  },
+  ),
+  Tooltip(
+  message: 'Đăng xuất',
+  child: IconButton(
+  icon: const Icon(Icons.logout, size: 24),
+  onPressed: _handleLogout,
+  ),
+  ),
+  ],
+  ),
+  body: BlocListener<InvoiceTempBloc, InvoiceTempState>(
+  listener: (context, state) {
+  if (state is InvoiceTempError) {
+  Get.snackbar(
+  'Lỗi',
+  'Không thể tải dữ liệu: ${state.message}',
+  snackPosition: SnackPosition.BOTTOM,
+  backgroundColor: Colors.redAccent.withOpacity(0.9),
+  colorText: Colors.white,
+  margin: const EdgeInsets.all(16),
+  borderRadius: 12,
+  duration: const Duration(seconds: 3),
+  animationDuration: const Duration(milliseconds: 400),
+  );
+  } else if (state is InvoiceTempLoaded && state.invoiceTemps.isEmpty) {
+  Get.snackbar(
+  'Thông báo',
+  'Không có phiếu nào trong khoảng thời gian từ ${DateFormat('dd/MM/yyyy').format(selectedStartDate)} đến ${DateFormat('dd/MM/yyyy').format(selectedEndDate)}',
+  snackPosition: SnackPosition.BOTTOM,
+  backgroundColor: Colors.orangeAccent.withOpacity(0.9),
+  colorText: Colors.white,
+  margin: const EdgeInsets.all(16),
+  borderRadius: 12,
+  duration: const Duration(seconds: 3),
+  animationDuration: const Duration(milliseconds: 400),
+  );
+  }
+  },
+  child: BlocBuilder<InvoiceTempBloc, InvoiceTempState>(
+  builder: (context, state) {
+  return _buildBody(context, state);
+  },
+  ),
+  ),
+  ),
+  ),
+  );
   }
 
   Widget _buildBody(BuildContext context, InvoiceTempState state) {
-    if (state is InvoiceTempLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+  if (state is InvoiceTempLoading) {
+  return const Center(
+  child: Column(
+  mainAxisAlignment: MainAxisAlignment.center,
+  children: [
+  CircularProgressIndicator(color: Colors.blueAccent),
+  SizedBox(height: 16),
+  Text(
+  'Đang tải dữ liệu...',
+  style: TextStyle(fontSize: 10, color: Colors.grey),
+  ),
+  ],
+  ),
+  );
+  }
 
-    if (state is InvoiceTempLoaded) {
-      final invoiceTemps = state.invoiceTemps;
-      if (invoiceTemps.isEmpty) {
-        return const Center(
-          child: Text(
-            'Không có dữ liệu',
-            style: TextStyle(fontSize: 18, color: Colors.grey),
-          ),
-        );
-      }
-
-      // Nhóm dữ liệu theo idInvoice và customerName
-      Map<String, List<InvoiceTempDto>> grouped = {};
-      for (var invoice in invoiceTemps) {
-        String key = '${invoice.idInvoice}_${invoice.customerName}';
-        if (grouped[key] == null) {
-          grouped[key] = [];
-        }
-        grouped[key]!.add(invoice);
-      }
-      final groupedInvoices = grouped.entries.toList();
-
-      return RefreshIndicator(
-        onRefresh: () async {
-          context.read<InvoiceTempBloc>().add(FetchInvoiceTempsEvent(
-            cm: 'list_invoice_temps',
-            sDate: DateFormat('dd/MM/yyyy').format(selectedStartDate),
-            eDate: DateFormat('dd/MM/yyyy').format(selectedEndDate),
-          ));
-        },
-        child: ListView.builder(
-          padding: const EdgeInsets.all(8),
-          itemCount: groupedInvoices.length,
-          itemBuilder: (context, index) {
-            return _buildInvoiceCard(groupedInvoices[index]);
-          },
-        ),
-      );
-    }
-
-    if (state is InvoiceTempError) {
+  if (state is InvoiceTempLoaded) {
+    final invoiceTemps = state.invoiceTemps;
+    if (invoiceTemps.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              'Lỗi: ${state.message}',
-              style: const TextStyle(fontSize: 18, color: Colors.red),
+            const Icon(Icons.info_outline, size: 48, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text(
+              'Không có dữ liệu',
+              style: TextStyle(fontSize: 18, color: Colors.grey),
             ),
             const SizedBox(height: 16),
             ElevatedButton(
@@ -418,38 +423,181 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                   eDate: DateFormat('dd/MM/yyyy').format(selectedEndDate),
                 ));
               },
-              child: const Text('Thử lại'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blueAccent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              child: const Text(
+                'Tải lại',
+                style: TextStyle(fontSize: 10, color: Colors.white),
+              ),
             ),
           ],
         ),
       );
     }
 
-    return const Center(child: Text('Nhấn để tải dữ liệu'));
-  }
+    // Nhóm dữ liệu theo invoiceId và customerName, nhưng chỉ lấy một InvoiceTempDto duy nhất cho mỗi key
+    Map<String, InvoiceTempDto> grouped = {};
+    for (var invoice in invoiceTemps) {
+      // Tạo key từ invoiceId và customerName, ví dụ: "30-ABC", "31-XYZ"
+      String key = '${invoice.idInvoice}-${invoice.customerName ?? "N/A"}';
+      // Chỉ lưu InvoiceTempDto đầu tiên cho mỗi key, tránh lặp
+      if (!grouped.containsKey(key)) {
+        grouped[key] = invoice;
+      }
+    }
+    final groupedInvoices = grouped.entries.toList();
 
-  Widget _buildInvoiceCard(MapEntry<String, List<InvoiceTempDto>> group) {
-    var firstInvoice = group.value.first;
-    return Card(
-      elevation: 4,
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(8),
-        title: Text(
-          'Đơn hàng: ${firstInvoice.orderVoucher}',
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text(
-          'Khách hàng: ${firstInvoice.customerName ?? ""}',
-          style: const TextStyle(fontSize: 10),
-        ),
-        onTap: () {
-          Get.to(() => InvoiceTempScreen(), arguments: firstInvoice);
+    return RefreshIndicator(
+      color: Colors.blueAccent,
+      onRefresh: () async {
+        context.read<InvoiceTempBloc>().add(FetchInvoiceTempsEvent(
+          cm: 'list_invoice_temps',
+          sDate: DateFormat('dd/MM/yyyy').format(selectedStartDate),
+          eDate: DateFormat('dd/MM/yyyy').format(selectedEndDate),
+        ));
+      },
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: groupedInvoices.length,
+        itemBuilder: (context, index) {
+          return _buildInvoiceCard(context, groupedInvoices[index]);
         },
       ),
     );
   }
-}
+
+  if (state is InvoiceTempError) {
+  return Center(
+  child: Column(
+  mainAxisAlignment: MainAxisAlignment.center,
+  children: [
+  const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+  const SizedBox(height: 16),
+  Text(
+  'Lỗi: ${state.message}',
+  style: const TextStyle(fontSize: 18, color: Colors.redAccent),
+  textAlign: TextAlign.center,
+  ),
+  const SizedBox(height: 16),
+  ElevatedButton(
+  onPressed: () {
+  context.read<InvoiceTempBloc>().add(FetchInvoiceTempsEvent(
+  cm: 'list_invoice_temps',
+  sDate: DateFormat('dd/MM/yyyy').format(selectedStartDate),
+  eDate: DateFormat('dd/MM/yyyy').format(selectedEndDate),
+  ));
+  },
+  style: ElevatedButton.styleFrom(
+  backgroundColor: Colors.blueAccent,
+  shape: RoundedRectangleBorder(
+  borderRadius: BorderRadius.circular(12),
+  ),
+  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+  ),
+  child: const Text(
+  'Thử lại',
+  style: TextStyle(fontSize: 10, color: Colors.white),
+  ),
+  ),
+  ],
+  ),
+  );
+  }
+
+  return Center(
+  child: Column(
+  mainAxisAlignment: MainAxisAlignment.center,
+  children: [
+  const Icon(Icons.touch_app, size: 48, color: Colors.grey),
+  const SizedBox(height: 16),
+  const Text(
+  'Nhấn để tải dữ liệu',
+  style: TextStyle(fontSize: 18, color: Colors.grey),
+  ),
+  const SizedBox(height: 16),
+  ElevatedButton(
+  onPressed: () {
+  context.read<InvoiceTempBloc>().add(FetchInvoiceTempsEvent(
+  cm: 'list_invoice_temps',
+  sDate: DateFormat('dd/MM/yyyy').format(selectedStartDate),
+  eDate: DateFormat('dd/MM/yyyy').format(selectedEndDate),
+  ));
+  },
+  style: ElevatedButton.styleFrom(
+  backgroundColor: Colors.blueAccent,
+  shape: RoundedRectangleBorder(
+  borderRadius: BorderRadius.circular(12),
+  ),
+  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+  ),
+  child: const Text(
+  'Tải dữ liệu',
+  style: TextStyle(fontSize: 10, color: Colors.white),
+  ),
+  ),
+  ],
+  ),
+  );
+  }
+
+  Widget _buildInvoiceCard(BuildContext context, MapEntry<String, InvoiceTempDto> group) {
+    var invoice = group.value; // Lấy InvoiceTempDto trực tiếp
+    return GestureDetector(
+      onTap: () {
+        Get.to(() => InvoiceTempScreen(), arguments: invoice);
+      },
+      child: Card(
+        elevation: 6,
+        margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: invoice.isSaved ? Colors.green.shade300 : null,
+            gradient: invoice.isSaved
+                ? null
+                : LinearGradient(
+              colors: [Colors.blueAccent.shade100, Colors.white],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: ListTile(
+            contentPadding: const EdgeInsets.all(16),
+            leading: CircleAvatar(
+              backgroundColor: Colors.blueAccent.withOpacity(0.1),
+              child: const Icon(Icons.receipt, color: Colors.white),
+            ),
+            title: Text(
+              'Đơn hàng: ${invoice.orderVoucher}',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: invoice.isSaved ? Colors.white : Colors.black87,
+              ),
+            ),
+            subtitle: Text(
+              'Khách hàng: ${invoice.customerName ?? "N/A"}',
+              style: TextStyle(
+                fontSize: 8,
+                color: invoice.isSaved ? Colors.white70 : Colors.grey[800],
+              ),
+            ),
+            trailing: Icon(
+              Icons.arrow_forward_ios,
+              size: 16,
+              color: invoice.isSaved ? Colors.white : Colors.grey[800],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  }

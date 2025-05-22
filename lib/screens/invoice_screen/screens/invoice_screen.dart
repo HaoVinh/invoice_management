@@ -29,8 +29,8 @@ class InvoiceTempScreen extends StatefulWidget {
 }
 
 class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
-  bool scanCamera = false;
-  String? selectedPalletOption;
+  bool scanCamera = true;
+  String? selectedPalletOption = 'palletChan';
   TextEditingController customerNameController = TextEditingController();
   TextEditingController barcodeController = TextEditingController();
   FocusNode _barcodeFocusNode = FocusNode();
@@ -49,6 +49,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   List<InvoiceDetailTempDto> promoProducts = [];
   late InvoiceDetailTempRepository _invoiceDetailTempRepository;
   InvoiceTempDto? _invoiceData; // Lưu thông tin hóa đơn
+
   @override
   void initState() {
     super.initState();
@@ -75,6 +76,11 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
         colorText: Colors.white,
       );
     }
+    _barcodeFocusNode.addListener(() {
+      if (_barcodeFocusNode.hasFocus) {
+        setState(() {});
+      }
+    });
   }
 
   Future<void> _loadInvoiceDetails() async {
@@ -157,10 +163,16 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     if (granted) {
       setState(() {
         scanCamera = !scanCamera;
-        if (_qrViewController != null) {
-          if (scanCamera) {
+        if (scanCamera) {
+          // Tắt bàn phím và bỏ focus khi bật camera
+
+          if (_qrViewController != null) {
             _qrViewController!.resumeCamera();
-          } else {
+          }
+        } else {
+          // Bật lại focus cho TextField khi tắt camera
+          _barcodeFocusNode.requestFocus();
+          if (_qrViewController != null) {
             _qrViewController!.pauseCamera();
           }
         }
@@ -204,9 +216,8 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
   void scannerBarcodeByCam(String barcode) {
     if (scanCamera && barcode.isNotEmpty) {
-      barcodeController.text = barcode;
-
       setState(() {
+        barcodeController.text = barcode;
         hasScan = true;
       });
 
@@ -215,40 +226,38 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           baseOffset: 0,
           extentOffset: barcodeController.text.length,
         );
-        FocusScope.of(context).requestFocus(_barcodeFocusNode);
       });
 
-      if (selectedPalletOption == null) {
-        Get.snackbar(
-          'Cảnh báo',
-          'Chưa chọn hình thức',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: Colors.orange,
-          colorText: Colors.white,
-        );
-        return;
-      }
-      bool isBarcodeFound = false;
+      // if (selectedPalletOption == null) {
+      //   Fluttertoast.showToast(
+      //     msg: 'Chưa chọn hình thức',
+      //     toastLength: Toast.LENGTH_SHORT,
+      //     gravity: ToastGravity.BOTTOM,
+      //     backgroundColor: Colors.orange,
+      //     textColor: Colors.white,
+      //     fontSize: 16.0,
+      //   );
+      //   return;
+      // }
 
+      bool isBarcodeFound = false;
       for (var i = 0; i < invoices.length; i++) {
         var element = invoices[i];
-
         if (element.productCode == barcode) {
           setState(() {
-            if(selectedPalletOption != null){
-
+            if (selectedPalletOption != null) {
               if (selectedPalletOption == 'palletChan') {
-                element.realQuantity = (element.realQuantity ?? 0) + (element.boxQuantity ?? 0);
+                element.realQuantity =  (element.realQuantity ?? 0) + (element.boxQuantity ?? 0);
                 element.realQuantityDVT = (element.realQuantity ?? 0) * (element.specification ?? 0);
               } else if (selectedPalletOption == 'palletLe') {
                 element.realQuantity = (element.realQuantity ?? 0) + 1;
                 element.realQuantityDVT = (element.realQuantity ?? 0) * (element.specification ?? 0);
-              }else if(selectedPalletOption == 'leDonViTinh'){
+              } else if (selectedPalletOption == 'leDonViTinh') {
                 element.realQuantityDVT = (element.realQuantityDVT ?? 0) + 1;
                 element.realQuantity = (element.realQuantityDVT ?? 0) / (element.boxQuantity ?? 0);
               }
+              _bringItemToTop(i);
             }
-            _bringItemToTop(i);
           });
 
           soundWhenScanned();
@@ -256,6 +265,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           break;
         }
       }
+
       if (!isBarcodeFound) {
         Get.snackbar(
           'Cảnh báo',
@@ -265,7 +275,6 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           colorText: Colors.white,
         );
       }
-
     }
   }
 
@@ -287,12 +296,13 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
 
       if(selectedPalletOption == null){
-        Get.snackbar(
-          'Cảnh báo',
-          'Chưa chọn hình thức',
-          snackPosition: SnackPosition.BOTTOM,
+        Fluttertoast.showToast(
+          msg: 'Chưa chọn hình thức',
+          toastLength: Toast.LENGTH_SHORT,
+          gravity: ToastGravity.BOTTOM,
           backgroundColor: Colors.orange,
-          colorText: Colors.white,
+          textColor: Colors.white,
+          fontSize: 16.0,
         );
         return;
       }
@@ -420,7 +430,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   // }
 
   void _saveInvoiceDetailTemp() {
-    if (details == null || details.isEmpty) {
+    if (details.isEmpty) {
       Get.snackbar(
         'Lỗi',
         'Dữ liệu chi tiết hóa đơn không hợp lệ',
@@ -443,6 +453,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       realQuantity: item.realQuantity,
       realQuantityDVT: item.realQuantityDVT,
       unit_price: item.unit_price,
+        invoiceTempId:item.invoiceTempId,
     )).toList();
 
     context.read<InvoiceDetailTempBloc>().add(SaveInvoiceDetailTempEvent(invoiceDetailTempDtos));
@@ -512,8 +523,8 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     child: Scaffold(
       appBar: AppBar(
         title: Text('Phiếu tạm'),
-        backgroundColor: appColor,
-        foregroundColor: primaryColor,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.grey[800],
         elevation: 1,
         actions: [
           IconButton(
@@ -540,7 +551,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                   physics: const BouncingScrollPhysics(),
                   controller: _scrollController,
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.only(left: 16.0, right: 16.0, bottom: 0, top: 0.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -571,11 +582,17 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                               child: TextField(
                                 controller: barcodeController,
                                 focusNode: _barcodeFocusNode,
-                                onChanged: (value) {
-                                  _onTyping(value);
-                                },
+                            readOnly: scanCamera,
+                            showCursor: !scanCamera,
+                            onChanged: (value) {
+                              if (!scanCamera) {
+                                _onTyping(value);
+                              }},
                                 onEditingComplete: () {
-                                  _onBarcodeEntered(barcodeController.text);
+                                  if (!scanCamera) {
+                                    _onBarcodeEntered(barcodeController.text);
+                                  }
+
                                 },
                                 decoration: InputDecoration(
                                   labelText: "Mã vạch",
@@ -596,7 +613,10 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                                   ),
                                   suffixIcon: IconButton(
                                     icon: Icon(Icons.clear, size: 16, color: Colors.grey.shade600),
-                                    onPressed: () => barcodeController.clear(),
+                                    onPressed: () {
+                                      barcodeController.clear();
+                                      _barcodeFocusNode.unfocus();
+                                    },
                                   ),
                                 ),
                                 style: const TextStyle(fontSize: 10),
@@ -646,10 +666,31 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                             //   ),
                             // ),
                             // const SizedBox(width: 6),
+                            Expanded(
+                              flex: 1,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Checkbox(
+                                    value: _invoiceData?.isSaved,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        _invoiceData?.isSaved= value ?? false;
+                                      });
+                                    },
+                                    visualDensity: VisualDensity(horizontal: -4, vertical: -4),
+                                  ),
+                                  Text(
+                                    "Đã lưu tạm",
+                                    style: TextStyle(fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                            ),
                             ElevatedButton(
                               onPressed: _saveInvoiceDetailTemp,
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.red.shade200,
+                                backgroundColor: Colors.green.shade500,
                                 foregroundColor: Colors.white, // Màu icon và text
                                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                                 minimumSize: const Size(65, 30),
@@ -658,24 +699,25 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 elevation: 3,
-                                shadowColor: Colors.red.shade200,
+                                shadowColor: Colors.green.shade500,
                               ).copyWith(
                                 // Hover effect
                                 overlayColor: MaterialStateProperty.resolveWith<Color?>(
                                       (Set<MaterialState> states) {
                                     if (states.contains(MaterialState.hovered) || states.contains(MaterialState.pressed)) {
-                                      return Colors.red.shade800; // Màu khi hover hoặc nhấn
+                                      return Colors.green.shade800; // Màu khi hover hoặc nhấn
                                     }
                                     return null;
                                   },
                                 ),
                               ),
+
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
-                                children: const [
+                                children: [
                                   Icon(Icons.save, size: 14, color: Colors.white), // icon trắng
-                                  SizedBox(width: 8),
-                                  Text("Lưu tạm", style: TextStyle(fontWeight: FontWeight.w500)),
+                                  const SizedBox(width: 8),
+                                  const Text("Lưu tạm", style: TextStyle(fontWeight: FontWeight.bold)),
                                 ],
                               ),
                             ),
@@ -749,27 +791,31 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     }
     return Container();
   }
-
   Widget buildLabel(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey[600],
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 200), // Giới hạn chiều rộng tối đa
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+            ),
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value.isNotEmpty ? value : "Chưa có thông tin",
-          style: const TextStyle(
-            fontSize: 10,
-            color: Colors.black,
+          const SizedBox(height: 4),
+          Text(
+            value.isNotEmpty ? value : "Chưa có thông tin",
+            style: const TextStyle(
+              fontSize: 18,
+              color: Colors.black,
+            ),
+            softWrap: true,
+            overflow: TextOverflow.visible,
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -782,7 +828,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           onChanged: (val) => setState(() => selectedPalletOption = val as String?),
           activeColor: Colors.blue[300],
         ),
-        Text(title, style: TextStyle(color: Colors.grey[700], fontSize: 9)),
+        Text(title, style: TextStyle(color: Colors.grey[700], fontSize: 12)),
       ],
     );
   }
@@ -828,38 +874,38 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
     return Column(
       children: [
-        Container(
-          padding: const EdgeInsets.fromLTRB(4.0, 8.0, 4.0, 8.0),
-          decoration: BoxDecoration(
-            color: Colors.grey[50],
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 30,
-                child: Text(
-                  'STT',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  'Sản phẩm',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+        // Container(
+        //   padding: const EdgeInsets.fromLTRB(4.0, 8.0, 4.0, 8.0),
+        //   decoration: BoxDecoration(
+        //     color: Colors.grey[50],
+        //     borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+        //   ),
+        //   child: Row(
+        //     children: [
+        //       SizedBox(
+        //         width: 30,
+        //         child: Text(
+        //           'STT',
+        //           style: TextStyle(
+        //             fontWeight: FontWeight.bold,
+        //             color: Colors.grey[800],
+        //             fontSize: 12,
+        //           ),
+        //         ),
+        //       ),
+        //       Expanded(
+        //         child: Text(
+        //           'Sản phẩm',
+        //           style: TextStyle(
+        //             fontWeight: FontWeight.bold,
+        //             color: Colors.grey[800],
+        //             fontSize: 12,
+        //           ),
+        //         ),
+        //       ),
+        //     ],
+        //   ),
+        // ),
         Container(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -894,7 +940,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                           Expanded(
                             child: Text(
                               '${item.productCode} - ${item.productName}',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                             ),
                           ),
                         ],
@@ -902,26 +948,38 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          const SizedBox(width: 30),
+                          const SizedBox(width: 30), // Cột STT
                           Expanded(
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Row(
-                                  children: [
-                                    Text(
-                                      'SLYC: ',
-                                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                                    ),
-                                    Text(
-                                      '${item.quantity}',
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.red,
+                                // Cột SLYC (item.quantity)
+                                Container(
+                                  width: 65, // Cố định chiều rộng cho cột SLYC
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        'SLYC: ',
+                                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                                       ),
-                                    ),
-                                  ],
+                                      Flexible(
+                                        child: Text(
+                                          '${item.quantity != null
+                                              ? (item.quantity == item.quantity?.toInt()
+                                              ? item.quantity?.toInt().toString() // Hiển thị số nguyên
+                                              : item.quantity!.toStringAsFixed(2)) // Hiển thị số thập phân với 2 chữ số
+                                              : '0'}',
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.red,
+                                          ),
+                                          overflow: TextOverflow.visible,
+                                          softWrap: true,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                                 // Hiển thị cột "SLTX (Thùng)" chỉ khi không phải là danh sách khuyến mãi
                                 if (!isPromoList) ...[
@@ -929,7 +987,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                                     width: 100,
                                     child: TextField(
                                       controller: realQuantityControllers[index],
-                                      enabled:selectedPalletOption != 'leDonViTinh',
+                                      enabled:selectedPalletOption != 'leDonViTinh' && selectedPalletOption != 'palletChan' ,
                                       onEditingComplete: () {
                                         if (selectedPalletOption == null) {
                                           Get.snackbar(
@@ -956,7 +1014,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                                         setState(() {});
                                       },
                                       style: const TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 14,
                                         fontWeight: FontWeight.w500,
                                         color: Colors.redAccent,
                                       ),
@@ -976,7 +1034,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                                   width: 100,
                                   child: TextField(
                                     controller: realQuantityDVTControllers[index],
-                                    enabled: selectedPalletOption != 'palletLe',
+                                    enabled: selectedPalletOption != 'palletLe' && selectedPalletOption != 'palletChan',
                                     onEditingComplete: () {
                                       // Cập nhật realQuantityDVT cho sản phẩm chính
                                       final text = realQuantityDVTControllers[index].text;
@@ -993,7 +1051,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                                       setState(() {});
                                     },
                                     style: const TextStyle(
-                                      fontSize: 12,
+                                      fontSize: 14,
                                       fontWeight: FontWeight.w500,
                                       color: Colors.redAccent,
                                     ),

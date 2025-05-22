@@ -13,8 +13,7 @@ class InvoiceDetailTempDto{
    double? realQuantity; // Số lượng thực xuất(thùng)
    double? realQuantityDVT; // Số lượng thực xuất (ĐVT)
    double? unit_price;
-
-
+   int invoiceTempId;
 
 
   InvoiceDetailTempDto({
@@ -29,6 +28,7 @@ class InvoiceDetailTempDto{
     this.realQuantity,
     this.realQuantityDVT,
     this.unit_price,
+    required this.invoiceTempId,
   });
 
 
@@ -47,6 +47,8 @@ class InvoiceDetailTempDto{
        spchinh: json['spchinh'] != null ? json['spchinh'] as bool : (productDHCode == null), // Ưu tiên json['spchinh']
        unit_price: (json['unit_price'] != null) ? json['unit_price'].toDouble() : null,
        realQuantityDVT: (json['realQuantityDVT'] != null) ? json['realQuantityDVT'].toDouble() : null,
+       invoiceTempId: json['invoiceTempId'],
+       realQuantity: (json['realQuantity'] != null) ? json['realQuantity'].toDouble() : null,
      );
    }
    Map<String, dynamic> toJson() {
@@ -61,6 +63,7 @@ class InvoiceDetailTempDto{
        'realQuantity': realQuantity,
        'realQuantityDVT': realQuantityDVT,
        'unit_price': unit_price,
+       'invoiceTempId':invoiceTempId,
      };
    }
    InvoiceDetailTempDto copyWith({
@@ -75,6 +78,7 @@ class InvoiceDetailTempDto{
      double? realQuantity,
      double? realQuantityDVT,
      double? unit_price,
+     int? invoiceTempId,
    }) {
      return InvoiceDetailTempDto(
        invoiceDetailId: invoiceDetailId ?? this.invoiceDetailId,
@@ -88,6 +92,7 @@ class InvoiceDetailTempDto{
        realQuantity: realQuantity ?? this.realQuantity,
        realQuantityDVT: realQuantityDVT ?? this.realQuantityDVT,
        unit_price:  unit_price ?? this.unit_price,
+         invoiceTempId: invoiceTempId ?? this.invoiceTempId,
      );
    }
 
