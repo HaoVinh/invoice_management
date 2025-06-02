@@ -4,8 +4,8 @@
 // const String baseDomain = "http://erp.lixco.com:91";
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String baseDomain = "http://192.168.0.83:8089";
-
+const String baseDomain = "http://192.168.0.83:7500";
+// const String baseDomain = "http://192.168.0.83:8089";
 const String baseUrl = "$baseDomain/consumption/api";
 
 
