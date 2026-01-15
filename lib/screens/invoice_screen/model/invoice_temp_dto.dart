@@ -25,7 +25,9 @@ class InvoiceTempDto{
    List<InvoiceDetailTempDto>? invoiceDetailTemps;
    bool exported ;
    bool isSaved;
-
+   bool? isExporting;
+  String? codeNV;
+  String? license_plate;
 
 
   InvoiceTempDto({
@@ -50,6 +52,8 @@ class InvoiceTempDto{
     this.orderId,
     required this.exported,
     required this.isSaved,
+    this.codeNV,
+    this.license_plate,
   });
 
 
@@ -82,6 +86,8 @@ class InvoiceTempDto{
            .toList(),
        exported: json['exported'],
        isSaved: json['isSaved'],
+       codeNV: json['codeNV'],
+       license_plate: json['license_plate'],
      );
    }
    Map<String, dynamic> toJson() {
@@ -108,6 +114,8 @@ class InvoiceTempDto{
        'invoiceDetailTemps': invoiceDetailTemps?.map((e) => e.toJson()).toList(),
        'exported': exported,
        'isSaved': isSaved,
+       'codeNV': codeNV,
+       'license_plate': license_plate,
      };
    }
    InvoiceTempDto copyWith({
@@ -131,6 +139,8 @@ class InvoiceTempDto{
      int? orderId,
      required bool exported ,
      required bool isSaved,
+     String? codeNV,
+     String? license_plate,
    }) {
      return InvoiceTempDto(
        idInvoice: idInvoice ?? this.idInvoice,
@@ -153,6 +163,8 @@ class InvoiceTempDto{
        orderId: orderId,
        exported: exported,
        isSaved: isSaved,
+       codeNV: codeNV,
+       license_plate:license_plate,
      );
    }
 

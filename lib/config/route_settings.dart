@@ -20,10 +20,8 @@ class RouteSettingsWithArguments extends RouteSettings {
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
-      case AuthScreen.routeName:
-        return MaterialPageRoute(builder: (_) => const AuthScreen());
-      case CheckingLoginPage.routeName:
-        return MaterialPageRoute(builder: (_) => const CheckingLoginPage());
+      case LoginScreen.routeName:
+        return MaterialPageRoute(builder: (_) => const LoginScreen());
       case HomeInvoiceScreen.routeName:
         return MaterialPageRoute(builder: (_) => const HomeInvoiceScreen());
       case InvoiceTempScreen.routeName:

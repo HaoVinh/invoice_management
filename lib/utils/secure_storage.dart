@@ -1,8 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:invoice_management/screens/auth_screen/model/LoginDTO.dart';
+import 'package:invoice_management/screens/auth_screen/model/LoginDTO.dart';
+import 'package:invoice_management/screens/auth_screen/model/LoginDTO.dart';
+import 'package:invoice_management/screens/auth_screen/model/LoginDTO.dart';
+import 'package:invoice_management/screens/auth_screen/model/LoginDTO.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '/screens/auth_screen/model/auth_response.dart';
+import '/screens/auth_screen/model/Brand.dart';
 
 class SecureStorageFrave {
 
@@ -14,7 +19,7 @@ class SecureStorageFrave {
     wOptions: WindowsOptions(),
   );
 
-  persisAuthShare(AuthResponse auth) async {
+  persisAuthShare(LoginDTO auth) async {
     SharedPreferences.getInstance().then((prefs) {
       prefs.setString('auth', jsonEncode(auth.toJson()));
     });
@@ -24,7 +29,7 @@ class SecureStorageFrave {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     var auth = prefs.getString('auth');
     if (auth != null) {
-      return AuthResponse.fromJson(jsonDecode(auth));
+      return LoginDTO.fromJson(jsonDecode(auth));
     }
   }
 
@@ -36,14 +41,14 @@ class SecureStorageFrave {
 
 
 
-  Future<void> persistAuth(AuthResponse auth) async {
+  Future<void> persistAuth(LoginDTO auth) async {
     await secureStorage.write(key: 'auth', value: jsonEncode(auth.toJson()));
   }
 
-  Future<AuthResponse?> readAuth() async {
+  Future<LoginDTO?> readAuth() async {
     final data = await secureStorage.read(key: 'auth');
     if (data != null) {
-      return AuthResponse.fromJson(jsonDecode(data));
+      return LoginDTO.fromJson(jsonDecode(data));
     }
     return null;
   }

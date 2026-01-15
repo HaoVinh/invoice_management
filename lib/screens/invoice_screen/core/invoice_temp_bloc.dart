@@ -23,6 +23,9 @@ class InvoiceTempBloc extends Bloc<InvoiceTempEvent, InvoiceTempState> {
         cm: event.cm,
         sDate: event.sDate,
         eDate: event.eDate,
+        codeNV: event.codeNV,
+        maNX: event.maNX,
+        statusNX: event.statusNX
       );
       emit(InvoiceTempLoaded(invoiceTemps));
     } catch (e) {

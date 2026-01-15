@@ -119,4 +119,29 @@ abstract class AbstractRepository {
       rethrow;
     }
   }
+  Future<Response> get2(
+      {required String url,
+        String? token,
+        String? finalUrl,
+        Map<String, dynamic>? queryParameters,
+      }) async {
+
+    try {
+      return await _dio.get(
+         url,
+        options: Options(
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            if (token != null) "token": "$token",
+
+          },
+        ),
+        queryParameters: queryParameters,
+      );
+    } on DioError catch (e) {
+      throw ErrorHandling(e.response);
+    } catch (e) {
+      rethrow;
+    }
+  }
 }

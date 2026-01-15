@@ -11,6 +11,7 @@ import 'package:invoice_management/screens/invoice_screen/core/invoice_detail_te
 import 'package:invoice_management/screens/invoice_screen/core/invoice_temp_bloc.dart';
 import 'package:invoice_management/screens/invoice_screen/repository/invoice_detail_temp_repository.dart';
 import 'package:invoice_management/screens/invoice_screen/repository/invoice_temp_repository.dart';
+import 'package:invoice_management/screens/invoice_screen/screens/invoice_screen.dart';
 import '/screens/auth_screen/repository/auth_repostory.dart';
 
 import 'package:url_strategy/url_strategy.dart';
@@ -116,10 +117,7 @@ class _InvoiceManagementAppState extends State<InvoiceManagementApp> {
   Widget build(BuildContext context) {
     return MultiBlocProvider(
       providers: [
-        BlocProvider(
-          create: (context) =>
-              AuthBloc(AuthRepository())..add(CheckLoginEvent()),
-        ),
+        BlocProvider(create: (context) => LoginBloc(AuthRepository())),
         BlocProvider(
           create: (context) =>
               InvoiceTempBloc(InvoiceTempRepository()),
@@ -143,7 +141,13 @@ class _InvoiceManagementAppState extends State<InvoiceManagementApp> {
           visualDensity: VisualDensity.adaptivePlatformDensity,
         ),
         darkTheme: ThemeData.dark(),
-        initialRoute: HomeInvoiceScreen.routeName,
+        // initialRoute: HomeInvoiceScreen.routeName,
+        getPages: [
+          GetPage(name: HomeInvoiceScreen.routeName, page: () => HomeInvoiceScreen()),
+          GetPage(name: InvoiceTempScreen.routeName, page: () => InvoiceTempScreen()),
+          GetPage(name: LoginScreen.routeName, page: () => LoginScreen()),
+        ],
+        initialRoute: LoginScreen.routeName,
         onGenerateRoute: RouteSettingsWithArguments.generateRoute,
       ),
     );

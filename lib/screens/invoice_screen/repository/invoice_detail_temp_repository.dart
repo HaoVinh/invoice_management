@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import '../../auth_screen/repository/auth_repostory.dart';
 import '../model/invoice_detail_temp_dto.dart';
 import '/repositories/abstract_interface.dart';
 import '/screens/invoice_screen/model/invoice_temp_dto.dart';
@@ -11,6 +12,13 @@ import '../../../utils/secure_storage.dart';
 class InvoiceDetailTempRepository extends AbstractRepository {
   final String _finalUrl = '/data/invoicedetailtemp';
   final String _saveUrl = '/data/saveinvoicedetailtemp';
+  Future<String> _getAccessToken() async {
+    final token = await AuthRepository().getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception("Chưa có accessToken, vui lòng đăng nhập lại.");
+    }
+    return token;
+  }
 
   Future<List<InvoiceDetailTempDto>> searchInvoiceDetail({
     required String cm,
@@ -19,12 +27,7 @@ class InvoiceDetailTempRepository extends AbstractRepository {
     try {
       var dt = '$cm,$idInvoice';
       var url = "$_finalUrl?cm=$cm&dt=$dt";
-      print('Calling API: $url');
-      // final auth = await secureStorage.readAuth();
-
-      // Token tạm thời
-      var accessToken =
-          "Bearer eyJhbGciOiJSUzI1NiJ9.eyJ1c2VyTmFtZSI6ImFkbWluYXBpIiwic3ViIjoiTElYQ08iLCJqdGkiOiJjNmIyMGVkZS03YTVlLTQwNzMtYjA2Zi0wOTAxZTQ0NzdiZTYiLCJpYXQiOjE3NDcxODMyNTIsImV4cCI6MTc0OTc3NTI1Mn0.IS_UKLFHqVsgSmuE8fPp-bGiPJf-8Fo2UV9C6n9wUFDaxY1t0BpQZWKPjrX7zfnTZOF0wUQnl4qhDLrtbmBFgs9UYhMRLvplrFvrh66k_BFdAgWY484QNpRKVRaYKlyhMgDcwy-i72s9StL_gRnj2j6zybqs5lTpSj4sN4PbSLTrcsu3u0HcabiroHrliIjoClQZdK_XXtiEyaJEnTqo_aZueungU550k4CJgQnhbffQcBL6bA6fCTdbqav2_M9adE-uaOzNzpD-cdS9DqH6rnNib2X4PXvUHhMBS8FG_fs3Kvb3gkF-xLU8OmomKPbuf6GlZiXURsATrmpIdhsOow";
+      final accessToken = await _getAccessToken();
       var response = await get(url: url, token: accessToken);
 
       if (response.statusCode == 200) {
@@ -42,13 +45,10 @@ class InvoiceDetailTempRepository extends AbstractRepository {
       rethrow;
     }
   }
-@override
-  Future<List<InvoiceDetailTempDto>> create(
+Future<List<InvoiceDetailTempDto>> create(
       List<InvoiceDetailTempDto> invoiceDetailTempDtos) async {
     try {
-      var accessToken =
-          "eyJhbGciOiJSUzI1NiJ9.eyJ1c2VyTmFtZSI6ImFkbWluYXBpIiwic3ViIjoiTElYQ08iLCJqdGkiOiJjNmIyMGVkZS03YTVlLTQwNzMtYjA2Zi0wOTAxZTQ0NzdiZTYiLCJpYXQiOjE3NDcxODMyNTIsImV4cCI6MTc0OTc3NTI1Mn0.IS_UKLFHqVsgSmuE8fPp-bGiPJf-8Fo2UV9C6n9wUFDaxY1t0BpQZWKPjrX7zfnTZOF0wUQnl4qhDLrtbmBFgs9UYhMRLvplrFvrh66k_BFdAgWY484QNpRKVRaYKlyhMgDcwy-i72s9StL_gRnj2j6zybqs5lTpSj4sN4PbSLTrcsu3u0HcabiroHrliIjoClQZdK_XXtiEyaJEnTqo_aZueungU550k4CJgQnhbffQcBL6bA6fCTdbqav2_M9adE-uaOzNzpD-cdS9DqH6rnNib2X4PXvUHhMBS8FG_fs3Kvb3gkF-xLU8OmomKPbuf6GlZiXURsATrmpIdhsOow";
-
+      final accessToken = await _getAccessToken();
       final data = {
         'data': jsonEncode({
           'invoiceDetailTemps': invoiceDetailTempDtos.map((dto) => dto.toJson()).toList(),

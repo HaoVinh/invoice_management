@@ -1,77 +1,90 @@
-import 'dart:async';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-import 'package:bloc/bloc.dart';
-import 'package:meta/meta.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '/screens/auth_screen/model/auth_response.dart';
+import '../../../constants/env.dart';
 
-import '../../../utils/secure_storage.dart';
 import '../repository/auth_repostory.dart';
-
+import '../model/Brand.dart';
+import '../model/LoginDTO.dart';
 part 'auth_event.dart';
-
 part 'auth_state.dart';
 
-class AuthBloc extends Bloc<AuthEvent, AuthState> {
+class LoginBloc extends Bloc<LoginEvent, LoginState> {
   final AuthRepository authRepository;
 
-  AuthBloc(this.authRepository) : super(const AuthState()) {
-    on<LoginEvent>(_onLogin);
-    on<CheckLoginEvent>(_onCheckLogin);
-    on<LogOutEvent>(_onLogOut);
+  LoginBloc(this.authRepository) : super(const LoginInitial(branches: [])) {
+    on<LoadInitialData>(_onLoadInitialData);
+    on<LoginSubmitted>(_onLoginSubmitted);
   }
 
-  Future<void> _onLogin(LoginEvent event, Emitter<AuthState> emit) async {
+  Future<void> _onLoadInitialData(
+      LoadInitialData event, Emitter<LoginState> emit) async {
+    emit(const LoginLoading(branches: []));
     try {
-      emit(LoadingAuthState());
-      final data = await authRepository.login(event.userName, event.passWord);
-      await Future.delayed(const Duration(milliseconds: 850));
-      if (data != null && data.message == null) {
-        await secureStorage.deleteSecureStorage();
-        await secureStorage.persistAuth(data);
-        emit(state.copyWith(auth: data));
-        return;
-      }
-      emit(FailureAuthState(data!.message!));
+      await Environment.initBranch();
+      final branches = await authRepository.getBranches();
+      final savedMember = await authRepository.getSavedLoginDTO();
+      final savedBrand = await authRepository.getSavedBrand();
+      final savedCredentials = await authRepository.getSavedCredentials();
+      
+      emit(LoginInitial(
+        branches: branches,
+        savedMember: savedMember,
+        savedBranch: savedCredentials?['branch'] ?? savedBrand?.toBranch(),
+        savedUsername: savedCredentials?['username'],
+        savedPassword: savedCredentials?['password'],
+      ));
     } catch (e) {
-      emit(FailureAuthState(e.toString()));
+      emit(LoginFailure('Lỗi tải dữ liệu: $e', branches: []));
     }
   }
 
-  Future<void> _onCheckLogin(
-      CheckLoginEvent event, Emitter<AuthState> emit) async {
+  Future<void> _onLoginSubmitted(
+      LoginSubmitted event,
+      Emitter<LoginState> emit,
+      ) async {
+    final currentState = state;
+    List<Branch> branches = [];
+    if (currentState is LoginInitial) {
+      branches = currentState.branches;
+    } else if (currentState is LoginLoading) {
+      branches = currentState.branches;
+    } else if (currentState is LoginSuccess) {
+      branches = currentState.branches;
+    } else if (currentState is LoginFailure) {
+      branches = currentState.branches;
+    }
+    emit(LoginLoading(branches: branches));
     try {
-      emit(LoadingAuthState());
-      if (await secureStorage.readAuth() != null) {
-        // final data = await authRepository.renewLoginController();
-        AuthResponse? data = await secureStorage.readAuth();
-        //Kiểm tra token có hết hạn hay không, token giới hạn thời gian là 3 giờ
-        if (data!.expiresIn! < DateTime.now().millisecondsSinceEpoch) {
-          await secureStorage.deleteSecureStorage();
-          emit(LogOutAuthState());
-        } else {
-          emit(state.copyWith(auth: data));
-        }
+      final result = await authRepository.login(
+        event.email,
+        event.password,
+        event.branch,
+      );
+      print('Login result: $result');
+      if (result['success'] == true) {
+        final token = await authRepository.getToken();
+        print('Login successful, token: $token');
+        
+        // Lưu credentials để tự động điền lần sau
+        await authRepository.saveCredentials(
+          username: event.email,
+          password: event.password,
+          branch: event.branch,
+        );
+        
+        emit(LoginSuccess(branches: branches));
       } else {
-        emit(LogOutAuthState());
+        emit(LoginFailure(
+          result['error']?.toString() ?? 'Đăng nhập thất bại',
+          branches: branches,
+        ));
       }
     } catch (e) {
-      emit(FailureAuthState(e.toString()));
+      print('Login bloc error: $e');
+      emit(LoginFailure('Đăng nhập thất bại: $e', branches: branches));
     }
   }
 
-  Future<void> _onLogOut(LogOutEvent event, Emitter<AuthState> emit) async {
-    try {
-      SharedPreferences _prefs = await SharedPreferences.getInstance();
-      String username = _prefs.getString('username') ?? '';
-      String password = _prefs.getString('password') ?? '';
-      await secureStorage.deleteSecureStorage();
-      await _prefs.clear();
-      await _prefs.setString("username", username);
-      await _prefs.setString("password", password);
-      emit(LogOutAuthState());
-    } catch (e) {
-      emit(FailureAuthState(e.toString()));
-    }
-  }
+
 }

@@ -7,14 +7,12 @@ class InvoiceDetailTempDto{
    double? boxQuantity;// Số lượng thùng/pallet
    double? specification;
    String? productDHCode;
-
-
    bool? spchinh;
    double? realQuantity; // Số lượng thực xuất(thùng)
    double? realQuantityDVT; // Số lượng thực xuất (ĐVT)
    double? unit_price;
    int invoiceTempId;
-
+   String? noteBatchCode;
 
   InvoiceDetailTempDto({
     required this.invoiceDetailId,
@@ -29,6 +27,7 @@ class InvoiceDetailTempDto{
     this.realQuantityDVT,
     this.unit_price,
     required this.invoiceTempId,
+    this.noteBatchCode,
   });
 
 
@@ -49,6 +48,7 @@ class InvoiceDetailTempDto{
        realQuantityDVT: (json['realQuantityDVT'] != null) ? json['realQuantityDVT'].toDouble() : null,
        invoiceTempId: json['invoiceTempId'],
        realQuantity: (json['realQuantity'] != null) ? json['realQuantity'].toDouble() : null,
+       noteBatchCode:  json['noteBatchCode'],
      );
    }
    Map<String, dynamic> toJson() {
@@ -64,6 +64,7 @@ class InvoiceDetailTempDto{
        'realQuantityDVT': realQuantityDVT,
        'unit_price': unit_price,
        'invoiceTempId':invoiceTempId,
+       'noteBatchCode': noteBatchCode,
      };
    }
    InvoiceDetailTempDto copyWith({
@@ -79,6 +80,7 @@ class InvoiceDetailTempDto{
      double? realQuantityDVT,
      double? unit_price,
      int? invoiceTempId,
+     String? noteBatchCode,
    }) {
      return InvoiceDetailTempDto(
        invoiceDetailId: invoiceDetailId ?? this.invoiceDetailId,
@@ -93,6 +95,7 @@ class InvoiceDetailTempDto{
        realQuantityDVT: realQuantityDVT ?? this.realQuantityDVT,
        unit_price:  unit_price ?? this.unit_price,
          invoiceTempId: invoiceTempId ?? this.invoiceTempId,
+         noteBatchCode: noteBatchCode ?? this.noteBatchCode,
      );
    }
 

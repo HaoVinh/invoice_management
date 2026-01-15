@@ -13,16 +13,21 @@ class FetchInvoiceTempsEvent extends InvoiceTempEvent {
   final String? sDate;
   final String? eDate;
   final String? query;
-
+  final String? codeNV;
+  final String? maNX;
+  final String? statusNX;
   const FetchInvoiceTempsEvent({
     required this.cm,
     this.sDate,
     this.eDate,
     this.query,
+    this.codeNV,
+    this.maNX,
+    this.statusNX
   });
 
   @override
-  List<Object?> get props => [cm, sDate, eDate, query];
+  List<Object?> get props => [cm, sDate, eDate, query,codeNV];
 }
 class SaveInvoiceTempEvent extends InvoiceTempEvent {
   final InvoiceTempDto invoiceTempDto;

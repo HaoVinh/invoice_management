@@ -1,11 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
-
 import 'package:dio/dio.dart';
-import '/repositories/abstract_interface.dart';
-import '/screens/invoice_screen/model/invoice_temp_dto.dart';
-
+import '../../../repositories/abstract_interface.dart';
 import '../../../repositories/abstract_repository.dart';
-import '../../../utils/secure_storage.dart';
+import '../../auth_screen/repository/auth_repostory.dart';
+import '../model/car_dto.dart';
+import '/screens/invoice_screen/model/invoice_temp_dto.dart';
 
 class InvoiceTempRepository extends AbstractRepository
     implements AbstractInterface<double, InvoiceTempDto> {
@@ -13,42 +13,93 @@ class InvoiceTempRepository extends AbstractRepository
   final String _saveUrl = '/data/saveinvoicetemp';
 
 
-  Future<List<InvoiceTempDto>> search(query, {required cm, sDate, eDate}) async {
-    try {
-      var url = "$_finalUrl?cm=$cm&sDate=$sDate&eDate=$eDate";
-      print('url: $url');
-      // final auth = await secureStorage.readAuth();
+  Future<String> _getAccessToken() async {
+    final token = await AuthRepository().getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception("Chưa có accessToken, vui lòng đăng nhập lại.");
+    }
+    return token;
+  }
 
-      var accessToken = "Bearer eyJhbGciOiJSUzI1NiJ9.eyJ1c2VyTmFtZSI6ImFkbWluYXBpIiwic3ViIjoiTElYQ08iLCJqdGkiOiJjNmIyMGVkZS03YTVlLTQwNzMtYjA2Zi0wOTAxZTQ0NzdiZTYiLCJpYXQiOjE3NDcxODMyNTIsImV4cCI6MTc0OTc3NTI1Mn0.IS_UKLFHqVsgSmuE8fPp-bGiPJf-8Fo2UV9C6n9wUFDaxY1t0BpQZWKPjrX7zfnTZOF0wUQnl4qhDLrtbmBFgs9UYhMRLvplrFvrh66k_BFdAgWY484QNpRKVRaYKlyhMgDcwy-i72s9StL_gRnj2j6zybqs5lTpSj4sN4PbSLTrcsu3u0HcabiroHrliIjoClQZdK_XXtiEyaJEnTqo_aZueungU550k4CJgQnhbffQcBL6bA6fCTdbqav2_M9adE-uaOzNzpD-cdS9DqH6rnNib2X4PXvUHhMBS8FG_fs3Kvb3gkF-xLU8OmomKPbuf6GlZiXURsATrmpIdhsOow";
-      var response = await get(url: url, token: accessToken);
+  Future<List<InvoiceTempDto>> search(query, {required String cm, String? sDate, String? eDate,String? codeNV,String? maNX,String? statusNX}) async {
+    try {
+      final url = "$_finalUrl?cm=$cm"
+          "${sDate != null ? '&sDate=$sDate' : ''}"
+          "${eDate != null ? '&eDate=$eDate' : ''}"
+          "${codeNV != null ? '&codeNV=$codeNV' : ''}"
+          "${maNX != null ? '&maNX=$maNX' : ''}"
+          "${statusNX != null ? '&statusNX=$statusNX' : ''}";
+      print('Search URL: $url');
+
+      final accessToken = await _getAccessToken();
+      final response = await get(url: url, token: accessToken);
+
       if (response.statusCode == 200) {
-        var data = response.data;
-        var res = InvoiceTempResponse.fromJson(data);
-        if (res.err != 0) {
-          return Future.error(res.msg ?? 'Lỗi không xác định');
+        final data = response.data;
+        if (data['err'] != 0) {
+          return Future.error(data['msg'] ?? 'Lỗi không xác định');
         }
-        return res.listInvoiceTemps ?? [];
+
+        if (data['dt'] == null || data['dt']['list_invoice_temps'] == null) {
+          return [];
+        }
+
+        final List<dynamic> list = data['dt']['list_invoice_temps'];
+        return list.map((item) => InvoiceTempDto.fromJson(item)).toList();
       } else {
-        return Future.error(response.data['message']);
+        return Future.error(response.data['msg'] ?? 'Lỗi server: ${response.statusCode}');
       }
     } catch (e) {
-      rethrow;
+      if (e is DioError) {
+        return Future.error(e.response?.data['msg'] ?? 'Lỗi kết nối: ${e.message}');
+      }
+      return Future.error('Lỗi không xác định: $e');
+    }
+  }
+  Future<List<CarDTO>> searchCar(String data) async {
+    try {
+      final url = "/data/license_plate?dt=$data";
+      print('Search URL: $url');
+
+      final accessToken = await _getAccessToken();
+      final response = await get(url: url, token: accessToken);
+
+      if (response.statusCode == 200) {
+        final data = response.data;
+        if (data['err'] != 0) {
+          return Future.error(data['msg'] ?? 'Lỗi không xác định');
+        }
+
+        if (data['dt'] == null ) {
+          return [];
+        }
+
+        final List<dynamic> list = data['dt']['cars'];
+        return list.map((item) => CarDTO.fromJson(item)).toList();
+      } else {
+        return Future.error(response.data['msg'] ?? 'Lỗi server: ${response.statusCode}');
+      }
+    } catch (e) {
+      if (e is DioError) {
+        return Future.error(e.response?.data['msg'] ?? 'Lỗi kết nối: ${e.message}');
+      }
+      return Future.error('Lỗi không xác định: $e');
     }
   }
   @override
   Future<InvoiceTempDto> create(InvoiceTempDto invoiceTempDto) async {
+    throw UnimplementedError();
+  }
+  Future<bool> updateInvoiceTemp(InvoiceTempDto invoiceTempDto) async {
     try {
-      // final auth = await secureStorage.readAuth();
-      var accessToken =
-          "Bearer eyJhbGciOiJSUzI1NiJ9.eyJ1c2VyTmFtZSI6ImFkbWluYXBpIiwic3ViIjoiTElYQ08iLCJqdGkiOiJjNmIyMGVkZS03YTVlLTQwNzMtYjA2Zi0wOTAxZTQ0NzdiZTYiLCJpYXQiOjE3NDcxODMyNTIsImV4cCI6MTc0OTc3NTI1Mn0.IS_UKLFHqVsgSmuE8fPp-bGiPJf-8Fo2UV9C6n9wUFDaxY1t0BpQZWKPjrX7zfnTZOF0wUQnl4qhDLrtbmBFgs9UYhMRLvplrFvrh66k_BFdAgWY484QNpRKVRaYKlyhMgDcwy-i72s9StL_gRnj2j6zybqs5lTpSj4sN4PbSLTrcsu3u0HcabiroHrliIjoClQZdK_XXtiEyaJEnTqo_aZueungU550k4CJgQnhbffQcBL6bA6fCTdbqav2_M9adE-uaOzNzpD-cdS9DqH6rnNib2X4PXvUHhMBS8FG_fs3Kvb3gkF-xLU8OmomKPbuf6GlZiXURsATrmpIdhsOow";
-
+      final accessToken = await _getAccessToken();
       final data = {
         'data': jsonEncode({
           'invoiceTempDTO': invoiceTempDto.toJson(),
         }),
       };
 
-      // print('Sending data to API: $data');
+      print('Sending data to API: $data');
 
       final response = await post(
         url: _saveUrl,
@@ -57,89 +108,102 @@ class InvoiceTempRepository extends AbstractRepository
       );
 
       if (response.statusCode == 200) {
-        final responseData = response.data;
-        // if (responseData['err'] != 0) {
-        //   return Future.error(responseData['msg'] ?? 'Lỗi không xác định');
-        // }
-        if(responseData['data'] == null || responseData['data'].isEmpty){
-          return InvoiceTempDto(idInvoice: invoiceTempDto.idInvoice,customerCode: invoiceTempDto.customerCode,customerName: invoiceTempDto.customerName,orderCode: invoiceTempDto.orderCode,orderVoucher: invoiceTempDto.orderVoucher,invoiceDate: invoiceTempDto.invoiceDate,taxValue: invoiceTempDto.taxValue,warehouseCode: invoiceTempDto.warehouseCode, ieCategories: invoiceTempDto.ieCategories,content: invoiceTempDto.content,note:invoiceTempDto.note,tongTien: invoiceTempDto.tongTien,thue:invoiceTempDto.thue,poNo: invoiceTempDto.poNo,lookupCode: invoiceTempDto.lookupCode,delivery_date: invoiceTempDto.delivery_date,voucher_code: invoiceTempDto.voucher_code,invoiceDetailTemps: invoiceTempDto.invoiceDetailTemps,exported: invoiceTempDto.exported,isSaved: invoiceTempDto.isSaved);
-        }
-        try{
-          final parsedData = jsonDecode(responseData['data']);
-          return InvoiceTempDto.fromJson(parsedData);
-        }catch(e){
-          print("Error parsing response data:$e");
+        final responseData = response.data as Map<String, dynamic>?;
 
-          return Future.error("Không parse dc : $e");
+        if (responseData == null || responseData['err'] == null) {
+          return false;
+        }
+
+        final err = responseData['err'] as int? ?? -1;
+        final msg = responseData['msg'] as String? ?? 'Không có thông tin lỗi';
+
+        if (err == 0) {
+          print('Lưu tạm thành công: $msg');
+          return true;
+        } else {
+          throw Exception(msg.isNotEmpty ? msg : 'Lỗi từ server (err: $err)');
         }
       } else {
-        return Future.error(response.data['message'] ?? 'Lỗi server');
+        throw Exception('Lỗi server: ${response.statusCode} - ${response.data['msg'] ?? 'Không có thông tin'}');
       }
     } catch (e) {
       if (e is DioError) {
-        return Future.error(e.response?.data['message'] ?? 'Lỗi kết nối: ${e.message}');
+        final msg = e.response?.data['msg'] ?? e.message ?? 'Lỗi kết nối';
+        print('DioError khi lưu tạm: $msg');
+        throw Exception(msg);
       }
-      return Future.error('Lỗi không xác định: $e');
+      print('Lỗi khi lưu tạm: $e');
+      rethrow;
     }
   }
+  Future<List<String>> findProductCodeByBarcodeThung(String barcode) async {
+    if (barcode.trim().isEmpty) {
+      return [];
+    }
 
+    try {
+      final url = "http://192.168.0.2:8380/norm/api/data/huongDanDongGoi?cm=barcode&dt=${barcode.trim()}";
+      final accessToken = "c894b18f-6e51-4bf3-9a3b-0a1c2d7d4211";
+
+      final response = await get2(
+        url: url,
+        token: accessToken,
+      ).timeout(const Duration(seconds: 10), onTimeout: () {
+        throw Exception('API quá chậm, thử lại sau');
+      });
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> json = response.data;
+
+        if (json['err'] != null && json['err'] != 0) {
+          throw Exception(json['msg'] ?? 'Lỗi từ server');
+        }
+
+        final dynamic dataField = json['dt']?['data'];
+
+        if (dataField is List) {
+          return dataField
+              .map((code) => code?.toString().trim())
+              .where((code) => code != null && code.isNotEmpty)
+              .cast<String>()
+              .toList();
+        } else if (dataField is String && dataField.trim().isNotEmpty) {
+          return [dataField.trim()];
+        }
+
+        return [];
+      } else {
+        throw Exception('Lỗi server: ${response.statusCode}');
+      }
+    } on TimeoutException catch (e) {
+      print('Timeout khi gọi API barcode $barcode: $e');
+      return [];
+    } on DioError catch (e) {
+      final msg = e.response?.data['msg'] ?? e.message;
+      print('DioError khi tìm barcode $barcode: $msg');
+      return [];
+    } catch (e) {
+      print('Lỗi khi tìm product code cho barcode $barcode: $e');
+      return [];
+    }
+  }
   @override
   Future<void> delete(InvoiceTempDto invoiceTempDto) {
-    // TODO: implement delete
     throw UnimplementedError();
   }
 
   @override
   Future<List<InvoiceTempDto>> getAll() {
-    // TODO: implement getAll
     throw UnimplementedError();
   }
 
   @override
   Future<InvoiceTempDto> getOne(double id) {
-    // TODO: implement getOne
     throw UnimplementedError();
   }
 
   @override
   Future<InvoiceTempDto> update(InvoiceTempDto invoiceTempDto) {
-    // TODO: implement update
     throw UnimplementedError();
   }
-  }
-
-  @override
-  Future<void> delete(InvoiceTempDto invoiceTempDto) {
-    // TODO: implement delete
-    throw UnimplementedError();
-  }
-
-  @override
-  Future<List<InvoiceTempDto>> getAll() {
-    // TODO: implement getAll
-    throw UnimplementedError();
-  }
-
-  @override
-  Future<InvoiceTempDto> getOne(double id) {
-    // TODO: implement getOne
-    throw UnimplementedError();
-  }
-
-  @override
-  Future<InvoiceTempDto> update(InvoiceTempDto invoiceTempDto) {
-    // TODO: implement update
-    throw UnimplementedError();
-  }
-
-
-
-
-
-
-
-
-
-
-
-
+}

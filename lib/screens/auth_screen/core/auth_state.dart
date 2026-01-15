@@ -1,25 +1,37 @@
 part of 'auth_bloc.dart';
 
 @immutable
-class AuthState {
-  final AuthResponse? auth;
+abstract class LoginState {
+  final List<Branch> branches;
 
-  const AuthState({this.auth});
-
-  //copyWith
-
-  AuthState copyWith({AuthResponse? auth}) => AuthState(
-        auth: auth ?? this.auth,
-      );
+  const LoginState({required this.branches});
 }
 
-class LoadingAuthState extends AuthState {}
+class LoginInitial extends LoginState {
+  final LoginDTO? savedMember;
+  final Branch? savedBranch;
+  final String? savedUsername;
+  final String? savedPassword;
 
-class SuccessAuthState extends AuthState {}
+  const LoginInitial({
+    required List<Branch> branches,
+    this.savedMember,
+    this.savedBranch,
+    this.savedUsername,
+    this.savedPassword,
+  }) : super(branches: branches);
+}
 
-class LogOutAuthState extends AuthState {}
+class LoginLoading extends LoginState {
+  const LoginLoading({required List<Branch> branches}) : super(branches: branches);
+}
 
-class FailureAuthState extends AuthState {
-  final error;
-  const FailureAuthState(this.error);
+class LoginSuccess extends LoginState {
+  const LoginSuccess({required List<Branch> branches}) : super(branches: branches);
+}
+
+class LoginFailure extends LoginState {
+  final String error;
+
+  const LoginFailure(this.error, {required List<Branch> branches}) : super(branches: branches);
 }
