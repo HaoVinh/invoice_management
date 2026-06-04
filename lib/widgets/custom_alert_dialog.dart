@@ -28,8 +28,8 @@ class Dialog extends StatelessWidget {
   const Dialog({
     Key? key,
     this.child,
-    this.insetAnimationDuration: const Duration(milliseconds: 100),
-    this.insetAnimationCurve: Curves.decelerate,
+    this.insetAnimationDuration = const Duration(milliseconds: 100),
+    this.insetAnimationCurve = Curves.decelerate,
   }) : super(key: key);
 
   /// The widget below this widget in the tree.
@@ -419,7 +419,7 @@ class SimpleDialog extends StatelessWidget {
   const SimpleDialog({
     Key? key,
     required this.title,
-    this.titlePadding: const EdgeInsets.fromLTRB(24.0, 24.0, 24.0, 0.0),
+    this.titlePadding = const EdgeInsets.fromLTRB(24.0, 24.0, 24.0, 0.0),
     this.children,
     this.contentPadding = const EdgeInsets.fromLTRB(0.0, 12.0, 0.0, 16.0),
     required this.semanticLabel,
@@ -619,7 +619,7 @@ class _DialogRoute<T> extends PopupRoute<T> {
 ///  * <https://material.google.com/components/dialogs.html>
 Future<T?> customShowDialog<T>({
   required BuildContext context,
-  bool barrierDismissible: true,
+  bool barrierDismissible = true,
   @Deprecated(
       'Instead of using the "child" argument, return the child from a closure '
       'provided to the "builder" argument. This will ensure that the BuildContext '

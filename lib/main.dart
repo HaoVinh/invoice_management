@@ -7,6 +7,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:invoice_management/screens/invoice_screen/barcode_screens/barcode_screen.dart';
 import 'package:invoice_management/screens/invoice_screen/core/invoice_detail_temp_bloc.dart';
 import 'package:invoice_management/screens/invoice_screen/core/invoice_temp_bloc.dart';
 import 'package:invoice_management/screens/invoice_screen/repository/invoice_detail_temp_repository.dart';
@@ -146,6 +147,7 @@ class _InvoiceManagementAppState extends State<InvoiceManagementApp> {
           GetPage(name: HomeInvoiceScreen.routeName, page: () => HomeInvoiceScreen()),
           GetPage(name: InvoiceTempScreen.routeName, page: () => InvoiceTempScreen()),
           GetPage(name: LoginScreen.routeName, page: () => LoginScreen()),
+          GetPage(name: BarcodeScanScreen.routeName, page: () => const BarcodeScanScreen()),
         ],
         initialRoute: LoginScreen.routeName,
         onGenerateRoute: RouteSettingsWithArguments.generateRoute,

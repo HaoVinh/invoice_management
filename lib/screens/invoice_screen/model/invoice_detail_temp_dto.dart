@@ -13,7 +13,7 @@ class InvoiceDetailTempDto{
    double? unit_price;
    int invoiceTempId;
    String? noteBatchCode;
-
+   String? unit;
   InvoiceDetailTempDto({
     required this.invoiceDetailId,
      this.quantity,
@@ -28,6 +28,7 @@ class InvoiceDetailTempDto{
     this.unit_price,
     required this.invoiceTempId,
     this.noteBatchCode,
+    this.unit,
   });
 
 
@@ -49,6 +50,7 @@ class InvoiceDetailTempDto{
        invoiceTempId: json['invoiceTempId'],
        realQuantity: (json['realQuantity'] != null) ? json['realQuantity'].toDouble() : null,
        noteBatchCode:  json['noteBatchCode'],
+       unit: json['unit'],
      );
    }
    Map<String, dynamic> toJson() {
@@ -65,6 +67,7 @@ class InvoiceDetailTempDto{
        'unit_price': unit_price,
        'invoiceTempId':invoiceTempId,
        'noteBatchCode': noteBatchCode,
+       'unit': unit,
      };
    }
    InvoiceDetailTempDto copyWith({
@@ -81,6 +84,7 @@ class InvoiceDetailTempDto{
      double? unit_price,
      int? invoiceTempId,
      String? noteBatchCode,
+     String? unit,
    }) {
      return InvoiceDetailTempDto(
        invoiceDetailId: invoiceDetailId ?? this.invoiceDetailId,
@@ -96,6 +100,7 @@ class InvoiceDetailTempDto{
        unit_price:  unit_price ?? this.unit_price,
          invoiceTempId: invoiceTempId ?? this.invoiceTempId,
          noteBatchCode: noteBatchCode ?? this.noteBatchCode,
+       unit: unit ?? this.unit,
      );
    }
 

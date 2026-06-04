@@ -1,8 +1,6 @@
 import 'package:intl/intl.dart';
 
 
-import 'package:intl/intl.dart';
-
 class CarDTO {
   final int id;
   final DateTime? createdDate;

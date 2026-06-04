@@ -82,7 +82,7 @@ class AuthRepository extends AbstractRepository {
             code: json['code'],
             name: json['name'],
             userName: json['user'],
-            pass: json['pass'], // Cẩn thận: không nên lưu pass thật, nhưng nếu cần thì mã hóa
+            pass: json['pass'],
             access_token: tokenFromApi,
           );
 
@@ -113,7 +113,7 @@ class AuthRepository extends AbstractRepository {
             default:
               try {
                 final errorJson = jsonDecode(response.body);
-                errorMessage = errorJson['message'] ?? 'Lỗi không xác định từ server.';
+                errorMessage = errorJson['message'] ?? 'Lỗi phía server không tìm thấy API đăng nhập.';
               } catch (_) {
                 errorMessage = 'Lỗi server: ${response.statusCode}';
               }
