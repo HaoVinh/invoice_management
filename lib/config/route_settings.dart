@@ -1,6 +1,7 @@
 //create route settings
 
 import 'package:flutter/material.dart';
+import 'package:invoice_management/screens/invoice_screen/pending_sync_screen.dart';
 import 'package:invoice_management/screens/invoice_screen/screens/invoice_screen.dart';
 
 import '../screens/screens.dart';
@@ -26,6 +27,8 @@ class RouteSettingsWithArguments extends RouteSettings {
         return MaterialPageRoute(builder: (_) => const HomeInvoiceScreen());
       case InvoiceTempScreen.routeName:
         return MaterialPageRoute(builder: (_) => const InvoiceTempScreen());
+      case PendingSyncScreen.routeName:
+        return MaterialPageRoute(builder: (_) => const PendingSyncScreen());
 
       default:
         return MaterialPageRoute(

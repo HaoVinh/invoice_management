@@ -1,16 +1,20 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
-import 'package:fluttertoast/fluttertoast.dart';
 import 'package:get/get.dart';
+import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart'
+    as mlkit;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_code_scanner/qr_code_scanner.dart';
 import 'package:stream_transform/stream_transform.dart' hide Switch;
@@ -27,11 +31,11 @@ import '../repository/invoice_temp_repository.dart';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const _kScanDebounce = Duration(milliseconds: 400);
-const _kScanCooldown = Duration(milliseconds: 800);
-const _kDuplicateScanWindow = Duration(milliseconds: 1400);
-const _kLockDurationNormal = 1500;
-const _kLockDurationError = 3000;
+const _kScanDebounce = Duration(milliseconds: 80);
+const _kScanCooldown = Duration(milliseconds: 120);
+const _kDuplicateScanWindow = Duration(milliseconds: 1600);
+const _kLockDurationNormal = 700;
+const _kLockDurationError = 1500;
 const _kTutorialSeenKey = 'has_seen_invoice_tutorial';
 const _kTutorialDontShowKey = 'dont_show_invoice_tutorial_again';
 const _kVideoAsset = 'assets/video/huong_dan_quet_barcode.mp4';
@@ -88,6 +92,52 @@ class _AiInvoiceAlert {
   });
 }
 
+class _ScanHistoryEntry {
+  final String productCode;
+  final String productName;
+  final String mode;
+  final double beforeQty;
+  final double beforeDVT;
+  final double afterQty;
+  final double afterDVT;
+  final DateTime at;
+
+  const _ScanHistoryEntry({
+    required this.productCode,
+    required this.productName,
+    required this.mode,
+    required this.beforeQty,
+    required this.beforeDVT,
+    required this.afterQty,
+    required this.afterDVT,
+    required this.at,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'productCode': productCode,
+        'productName': productName,
+        'mode': mode,
+        'beforeQty': beforeQty,
+        'beforeDVT': beforeDVT,
+        'afterQty': afterQty,
+        'afterDVT': afterDVT,
+        'at': at.toIso8601String(),
+      };
+
+  factory _ScanHistoryEntry.fromJson(Map<String, dynamic> json) {
+    return _ScanHistoryEntry(
+      productCode: json['productCode']?.toString() ?? '',
+      productName: json['productName']?.toString() ?? '',
+      mode: json['mode']?.toString() ?? '',
+      beforeQty: double.tryParse(json['beforeQty']?.toString() ?? '') ?? 0,
+      beforeDVT: double.tryParse(json['beforeDVT']?.toString() ?? '') ?? 0,
+      afterQty: double.tryParse(json['afterQty']?.toString() ?? '') ?? 0,
+      afterDVT: double.tryParse(json['afterDVT']?.toString() ?? '') ?? 0,
+      at: DateTime.tryParse(json['at']?.toString() ?? '') ?? DateTime.now(),
+    );
+  }
+}
+
 // ─── Item Controller Cache ────────────────────────────────────────────────────
 
 /// Holds controllers for one InvoiceDetailTempDto row.
@@ -135,6 +185,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   bool _showTutorialBot = true;
   bool _dontShowAgain = false;
   bool _isVideoInitialized = false;
+  bool _isOnline = true;
   PalletMode? _palletMode = PalletMode.palletChan;
 
   // ── Scan state ──
@@ -145,12 +196,19 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   String? _lastScannedCode;
   String? _lastProcessedBarcode;
   DateTime? _lastProcessedAt;
+  String? _lastNoticeKey;
+  DateTime? _lastNoticeAt;
+  final Map<String, int> _noticeShownCounts = {};
+  OverlayEntry? _noticeEntry;
+  Timer? _noticeTimer;
+  final Queue<String> _pendingManualScans = ListQueue<String>();
   Timer? _scanLockTimer;
 
   // ── Data ──
   InvoiceTempDto? _invoiceData;
   List<InvoiceDetailTempDto> _mainProducts = [];
   List<InvoiceDetailTempDto> _promoProducts = [];
+  final List<_ScanHistoryEntry> _scanHistory = [];
 
   /// Single source of truth. mainProducts + promoProducts are derived views.
   List<InvoiceDetailTempDto> get _allItems =>
@@ -171,17 +229,28 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   final _storage = const FlutterSecureStorage();
   final _detailRepo = InvoiceDetailTempRepository();
   final _invoiceTempRepo = InvoiceTempRepository();
+  final Map<String, List<String>> _barcodeProductCodesCache = {};
 
   // ── QR ──
   QRViewController? _qrCtrl;
   StreamSubscription? _qrSub;
+  StreamSubscription? _connectivitySub;
 
   // ── Video ──
   late VideoPlayerController _videoCtrl;
 
   final ImagePicker _imagePicker = ImagePicker();
+  final mlkit.BarcodeScanner _barcodeImageScanner = mlkit.BarcodeScanner();
   final TextRecognizer _textRecognizer = TextRecognizer();
+  final AudioPlayer _scanSoundPlayer = AudioPlayer();
 
+//biến dành cho đơn hàng xuất khẩu chỉ quét
+  bool get _isXkOrder =>
+      (_invoiceData?.orderType ?? '').trim().toUpperCase() == 'XK' &&
+      (_invoiceData?.scanonly ?? false);
+  //biến dành cho đơn hàng xuaất khẩu default
+  bool get _isXkOrder2 =>
+      (_invoiceData?.orderType ?? '').trim().toUpperCase() == 'XK';
   // ── Per-row controller cache ──
   // Key = productCode, rebuilt whenever list changes.
   final Map<String, _ItemControllers> _mainCtrlCache = {};
@@ -202,6 +271,18 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
   double _parseQty(String text) {
     return double.tryParse(text.trim().replaceAll(',', '.')) ?? 0.0;
+  }
+
+  double _qtyFromDVT(InvoiceDetailTempDto item, double qtyDVT) {
+    final qty = qtyDVT / _safeSpecification(item);
+    if (item.spchinh != false) return qty;
+
+    final requestedQty =
+        (_requestedQuantityDVT(item) / _safeSpecification(item))
+            .floorToDouble();
+    final roundedQty = qty.roundToDouble();
+    if (requestedQty > 0 && roundedQty > requestedQty) return requestedQty;
+    return roundedQty;
   }
 
   int _enteredItemCount(List<InvoiceDetailTempDto> items) {
@@ -294,18 +375,221 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     }
     if (alert == null) return;
 
-    Get.snackbar(
-      'Cảnh báo: ${alert.title}',
-      alert.message,
-      snackPosition: SnackPosition.BOTTOM,
-      backgroundColor: Colors.orange.shade700,
-      colorText: Colors.white,
-      duration: const Duration(seconds: 4),
-      margin: const EdgeInsets.all(16),
-      borderRadius: 12,
-      snackStyle: SnackStyle.FLOATING,
-      icon: const Icon(Icons.psychology_alt_rounded,
-          color: Colors.white, size: 28),
+    final noticeKey = '${alert.title}:${alert.productCode ?? ''}';
+    if (alert.title == 'Thiếu mã lô hàng') {
+      final shownCount = _noticeShownCounts[noticeKey] ?? 0;
+      if (shownCount >= 2) return;
+      _noticeShownCounts[noticeKey] = shownCount + 1;
+    }
+    if (!_canShowNotice(noticeKey, const Duration(seconds: 6))) return;
+
+    final shownAlert = alert;
+    Future.delayed(const Duration(milliseconds: 900), () {
+      if (!mounted) return;
+      _showManagedSnackbar(
+        'Cảnh báo: ${shownAlert.title}',
+        shownAlert.message,
+        backgroundColor: Colors.orange.shade700,
+        duration: const Duration(milliseconds: 1800),
+        icon: const Icon(Icons.psychology_alt_rounded,
+            color: Colors.white, size: 28),
+      );
+    });
+  }
+
+  bool _canShowNotice(String key, Duration minInterval) {
+    final now = DateTime.now();
+    if (_lastNoticeKey == key &&
+        _lastNoticeAt != null &&
+        now.difference(_lastNoticeAt!) < minInterval) {
+      return false;
+    }
+    _lastNoticeKey = key;
+    _lastNoticeAt = now;
+    return true;
+  }
+
+  void _showManagedSnackbar(
+    String title,
+    String message, {
+    required Color backgroundColor,
+    Duration duration = const Duration(seconds: 2),
+    Widget? icon,
+  }) {
+    _showModernNotice(
+      title: title,
+      message: message,
+      color: backgroundColor,
+      duration: duration,
+      icon: icon,
+    );
+  }
+
+  void _showModernNotice({
+    required String title,
+    required String message,
+    required Color color,
+    Duration duration = const Duration(seconds: 2),
+    Widget? icon,
+  }) {
+    if (!mounted) return;
+    final overlay = _currentOverlay();
+    if (overlay == null) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showModernNotice(
+            title: title,
+            message: message,
+            color: color,
+            duration: duration,
+            icon: icon,
+          );
+        }
+      });
+      return;
+    }
+    _noticeTimer?.cancel();
+    _noticeEntry?.remove();
+
+    _noticeEntry = OverlayEntry(
+      builder: (context) => Positioned(
+        left: 16,
+        right: 16,
+        bottom: MediaQuery.of(context).padding.bottom + 18,
+        child: SafeArea(
+          child: Material(
+            color: Colors.transparent,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: 1),
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, child) => Transform.translate(
+                offset: Offset(0, 18 * (1 - value)),
+                child: Opacity(opacity: value, child: child),
+              ),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [color, color.withValues(alpha: 0.86)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.28),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Center(
+                        child: icon ??
+                            const Icon(Icons.notifications_active_rounded,
+                                color: Colors.white, size: 24),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            message,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.92),
+                              fontSize: 12.5,
+                              height: 1.3,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: _hideModernNotice,
+                      borderRadius: BorderRadius.circular(999),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(Icons.close_rounded,
+                            color: Colors.white.withValues(alpha: 0.9),
+                            size: 18),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    overlay.insert(_noticeEntry!);
+    _noticeTimer = Timer(duration, _hideModernNotice);
+  }
+
+  OverlayState? _currentOverlay() {
+    try {
+      return Navigator.of(context, rootNavigator: true).overlay;
+    } catch (_) {
+      final overlayContext = Get.overlayContext;
+      if (overlayContext != null) {
+        return Overlay.maybeOf(overlayContext, rootOverlay: true);
+      }
+      return Overlay.maybeOf(context, rootOverlay: true);
+    }
+  }
+
+  void _hideModernNotice() {
+    _noticeTimer?.cancel();
+    _noticeTimer = null;
+    _noticeEntry?.remove();
+    _noticeEntry = null;
+  }
+
+  void _showScanLookupStatus(
+    String message, {
+    Color backgroundColor = Colors.blue,
+  }) {
+    _showManagedSnackbar(
+      'Quét barcode',
+      message,
+      backgroundColor: backgroundColor,
+      duration: const Duration(milliseconds: 2200),
+      icon: const Icon(Icons.qr_code_scanner_rounded,
+          color: Colors.white, size: 26),
     );
   }
 
@@ -342,6 +626,102 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     };
   }
 
+  Widget _modernDialogHeader({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    Color color = const Color(0xFF00A859),
+  }) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(icon, color: color, size: 24),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w800)),
+              if (subtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(subtitle,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w500)),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _modernDialogShell({
+    required Widget title,
+    required Widget content,
+    required List<Widget> actions,
+  }) {
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+      contentPadding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
+      actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+      title: title,
+      content: content,
+      actions: actions,
+    );
+  }
+
+  Widget _dialogInfoTile({
+    required IconData icon,
+    required String title,
+    required String value,
+    Color color = const Color(0xFF00A859),
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.grey.shade600,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(value,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<bool?> _showInvoiceSummaryDialog({bool canContinue = false}) async {
     _flushControllersToItems();
     final summary = _invoiceSummaryNumbers();
@@ -357,13 +737,11 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     return showDialog<bool>(
       context: context,
       barrierDismissible: !canContinue,
-      builder: (_) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.summarize_rounded, color: Color(0xFF00A859)),
-            SizedBox(width: 10),
-            Expanded(child: Text('Tóm tắt hóa đơn')),
-          ],
+      builder: (_) => _modernDialogShell(
+        title: _modernDialogHeader(
+          icon: Icons.summarize_rounded,
+          title: 'Tóm tắt đơn hàng',
+          subtitle: 'Kiểm tra lần cuối trước khi hoàn thành',
         ),
         content: SizedBox(
           width: double.maxFinite,
@@ -410,7 +788,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'AI phát hiện ${alerts.length} cảnh báo',
+                      'Phát hiện ${alerts.length} cảnh báo',
                       style: TextStyle(
                           color: Colors.orange.shade800,
                           fontWeight: FontWeight.w700),
@@ -442,6 +820,12 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           ),
           if (canContinue)
             ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00A859),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
               onPressed: () => Navigator.of(context).pop(true),
               child: const Text('Hoàn thành'),
             ),
@@ -497,31 +881,20 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     return double.tryParse(match.group(1)!.replaceAll(',', '.'));
   }
 
-  List<String> _extractBarcodeCandidatesFromOcr(String text) {
-    final candidates = <String>[];
-    final labeledPatterns = [
-      RegExp(r'(?:BARCODE|MA VACH|MÃ VẠCH|EAN|UPC)\s*[:\-]?\s*([A-Z0-9\-]+)',
-          caseSensitive: false),
-      RegExp(r'\b(\d{8,14})\b'),
-      RegExp(r'\b([A-Z0-9]{6,30})\b', caseSensitive: false),
-    ];
-
-    for (final pattern in labeledPatterns) {
-      for (final match in pattern.allMatches(text)) {
-        final value = match.group(1)?.trim().replaceAll(RegExp(r'\s+'), '');
-        if (value != null && value.length >= 6) candidates.add(value);
-      }
-    }
-
-    return candidates.toSet().take(8).toList();
+  Future<List<String>> _extractBarcodesFromImage(InputImage image) async {
+    final barcodes = await _barcodeImageScanner.processImage(image);
+    return barcodes
+        .map((barcode) => barcode.rawValue?.trim())
+        .where((value) => value != null && value.isNotEmpty)
+        .cast<String>()
+        .toSet()
+        .toList();
   }
 
-  Future<({String barcode, String productCode})?> _findProductFromOcrBarcode(
-      String text) async {
-    final barcodeCandidates = _extractBarcodeCandidatesFromOcr(text);
+  Future<({String barcode, String productCode})?> _findProductFromBarcodes(
+      List<String> barcodeCandidates) async {
     for (final barcode in barcodeCandidates) {
-      final codesFromApi =
-          await _invoiceTempRepo.findProductCodeByBarcodeThung(barcode);
+      final codesFromApi = await _lookupProductCodesByBarcode(barcode);
       if (codesFromApi.isEmpty) continue;
 
       final matched = _allItems
@@ -540,40 +913,167 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     return null;
   }
 
+  Future<List<String>> _lookupProductCodesByBarcode(String barcode) async {
+    final cacheKey = barcode.trim();
+    if (cacheKey.isEmpty) return [];
+    if (_barcodeProductCodesCache.containsKey(cacheKey)) {
+      return _barcodeProductCodesCache[cacheKey]!;
+    }
+
+    final codesFromApi =
+        await _invoiceTempRepo.findProductCodeByBarcodeThung(cacheKey);
+    _barcodeProductCodesCache[cacheKey] = codesFromApi;
+    return codesFromApi;
+  }
+
+  int _gtin14CheckDigit(String first13Digits) {
+    var sum = 0;
+    for (var i = first13Digits.length - 1, posFromRight = 1;
+        i >= 0;
+        i--, posFromRight++) {
+      final digit = int.parse(first13Digits[i]);
+      sum += digit * (posFromRight.isOdd ? 3 : 1);
+    }
+    return (10 - (sum % 10)) % 10;
+  }
+
+  List<String> _barcodeLookupCandidates(String barcode) {
+    final raw = barcode.trim();
+    final candidates = <String>[raw];
+
+    // Một số barcode GTIN-14/ITF-14 khi quét bằng camera có thể bị plugin
+    // nhận nhầm thành EAN-13 và mất số check digit cuối. Ví dụ:
+    // 14904112828480 -> 1490411282848. Khi gặp 13 chữ số, thử thêm lại
+    // check digit GTIN-14 để tra API.
+    if (RegExp(r'^\d{13}$').hasMatch(raw)) {
+      candidates.add('$raw${_gtin14CheckDigit(raw)}');
+    }
+
+    return candidates.toSet().toList();
+  }
+
   Future<void> _captureOcrImage() async {
     if (!await _ensureCameraPermission()) return;
+    final statusNotifier = ValueNotifier<String>('Đang nhận diện barcode...');
     try {
       final file = await _imagePicker.pickImage(
         source: ImageSource.camera,
-        imageQuality: 85,
+        imageQuality: 65,
+        maxWidth: 1280,
+        maxHeight: 1280,
       );
       if (file == null) return;
 
-      Get.dialog(const Center(child: CircularProgressIndicator()),
-          barrierDismissible: false);
+      _showOcrProcessingDialog(statusNotifier);
       final image = InputImage.fromFilePath(file.path);
-      final recognizedText = await _textRecognizer.processImage(image);
-      if (Get.isDialogOpen == true) Get.back();
+      final barcodeCandidates = await _extractBarcodesFromImage(image);
+      if (barcodeCandidates.isEmpty) {
+        if (Get.isDialogOpen == true) Get.back();
+        _showErrorSnackbar(
+            'Không thấy mã vạch trong ảnh. Vui lòng chụp rõ phần barcode.');
+        return;
+      }
 
-      await _handleOcrResult(recognizedText.text);
+      final barcodeText = barcodeCandidates.join(', ');
+      statusNotifier.value =
+          'Đã nhận diện barcode: $barcodeText\nĐang tra mã sản phẩm...';
+      final recognizedTextFuture = _textRecognizer.processImage(image);
+      final productFuture = _findProductFromBarcodes(barcodeCandidates);
+      final recognizedText = await recognizedTextFuture;
+      final product = await productFuture;
+      statusNotifier.value = product == null
+          ? 'Đã nhận diện barcode: $barcodeText\nChưa khớp được mã sản phẩm.'
+          : 'Đã nhận diện barcode: ${product.barcode}\nMã SP: ${product.productCode}';
+      if (Get.isDialogOpen == true) Get.back();
+      _showScanLookupStatus(
+        product == null
+            ? 'Đã nhận diện barcode: $barcodeText\nChưa khớp được mã SP'
+            : 'Đã nhận diện barcode: ${product.barcode}\nMã SP: ${product.productCode}',
+        backgroundColor: product == null ? Colors.orange : Colors.green,
+      );
+
+      await _handleOcrResult(
+        recognizedText.text,
+        barcodeCandidates: barcodeCandidates,
+        product: product,
+      );
     } catch (e) {
       if (Get.isDialogOpen == true) Get.back();
       _showErrorSnackbar('Không đọc được hình ảnh: $e');
+    } finally {
+      statusNotifier.dispose();
     }
   }
 
-  Future<void> _handleOcrResult(String text) async {
-    if (text.trim().isEmpty) {
-      _showErrorSnackbar('Không nhận diện được chữ trong ảnh');
+  void _showOcrProcessingDialog(ValueNotifier<String> statusNotifier) {
+    Get.dialog(
+      Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: 280,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.16),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 34,
+                  height: 34,
+                  child: CircularProgressIndicator(strokeWidth: 3),
+                ),
+                const SizedBox(height: 14),
+                ValueListenableBuilder<String>(
+                  valueListenable: statusNotifier,
+                  builder: (_, value, __) => Text(
+                    value,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.grey.shade800,
+                      fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      barrierDismissible: false,
+    );
+  }
+
+  Future<void> _handleOcrResult(
+    String text, {
+    required List<String> barcodeCandidates,
+    ({String barcode, String productCode})? product,
+  }) async {
+    if (barcodeCandidates.isEmpty) {
+      _showErrorSnackbar('Không thấy mã vạch trong ảnh');
       return;
     }
 
-    final product = await _findProductFromOcrBarcode(text);
+    product ??= await _findProductFromBarcodes(barcodeCandidates);
     final batchCode = _extractBatchFromOcr(text);
     final qtyDVT = _extractQuantityFromOcr(text);
+    final rawPreviewText =
+        text.trim().isEmpty ? 'Barcode: ${barcodeCandidates.join(', ')}' : text;
 
     if (product == null) {
-      await _showOcrPreviewDialog(text, null, null, batchCode, qtyDVT);
+      await _showOcrPreviewDialog(
+          rawPreviewText, null, barcodeCandidates.first, batchCode, qtyDVT);
       return;
     }
 
@@ -581,7 +1081,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     final item = _allItems.firstWhere(
         (e) => e.productCode?.toLowerCase() == productCode.toLowerCase());
     final apply = await _showOcrPreviewDialog(
-        text, item, product.barcode, batchCode, qtyDVT);
+        rawPreviewText, item, product.barcode, batchCode, qtyDVT);
     if (apply != true) return;
 
     final cache = item.spchinh == false ? _promoCtrlCache : _mainCtrlCache;
@@ -600,10 +1100,12 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     final idx = _allItems.indexWhere(
         (e) => e.productCode?.toLowerCase() == productCode.toLowerCase());
     if (idx >= 0) _bringToTop(idx);
-    Get.snackbar('OCR/AI camera', 'Đã nhận diện $productCode',
-        snackPosition: SnackPosition.BOTTOM,
-        backgroundColor: Colors.green,
-        colorText: Colors.white);
+    _showManagedSnackbar(
+      'OCR/AI camera',
+      'Đã nhận diện $productCode',
+      backgroundColor: Colors.green,
+      duration: const Duration(milliseconds: 1500),
+    );
   }
 
   Future<bool?> _showOcrPreviewDialog(
@@ -615,13 +1117,13 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   ) {
     return showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.document_scanner_rounded, color: Color(0xFF00A859)),
-            SizedBox(width: 10),
-            Expanded(child: Text('OCR/AI camera')),
-          ],
+      builder: (_) => _modernDialogShell(
+        title: _modernDialogHeader(
+          icon: Icons.document_scanner_rounded,
+          title: 'OCR/AI camera',
+          subtitle: item == null
+              ? 'Chưa khớp được barcode với sản phẩm'
+              : 'Kiểm tra dữ liệu nhận diện',
         ),
         content: SizedBox(
           width: double.maxFinite,
@@ -629,14 +1131,39 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Sản phẩm: ${item?.productCode ?? 'Chưa khớp'}',
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 6),
-              Text('Barcode: ${barcode ?? 'Không thấy/không khớp'}'),
-              const SizedBox(height: 6),
-              Text('Mã lô: ${batchCode ?? 'Không thấy'}'),
-              Text(
-                  'Số lượng ĐVT: ${qtyDVT == null ? 'Không thấy' : _formatQty(qtyDVT)}'),
+              _dialogInfoTile(
+                icon: Icons.inventory_2_rounded,
+                title: 'Sản phẩm',
+                value: item?.productCode ?? 'Chưa khớp',
+              ),
+              const SizedBox(height: 8),
+              _dialogInfoTile(
+                icon: Icons.qr_code_2_rounded,
+                title: 'Barcode',
+                value: barcode ?? 'Không thấy/không khớp',
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: _dialogInfoTile(
+                      icon: Icons.numbers_rounded,
+                      title: 'Mã lô',
+                      value: batchCode ?? 'Không thấy',
+                      color: Colors.orange,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _dialogInfoTile(
+                      icon: Icons.straighten_rounded,
+                      title: 'SL ĐVT',
+                      value: qtyDVT == null ? 'Không thấy' : _formatQty(qtyDVT),
+                      color: Colors.blue,
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               Container(
                 constraints: const BoxConstraints(maxHeight: 120),
@@ -660,6 +1187,12 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
               child: const Text('Đóng')),
           if (item != null)
             ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00A859),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
                 onPressed: () => Navigator.of(context).pop(true),
                 child: const Text('Áp dụng')),
         ],
@@ -677,17 +1210,22 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     _invoiceData = Get.arguments as InvoiceTempDto?;
     if (_invoiceData != null) {
       _customerNameCtrl.text = _invoiceData!.customerName ?? '';
+      _loadScanHistory();
       _loadInvoiceDetails();
     } else {
       _isLoading = false;
-      Get.snackbar('Lỗi', 'Dữ liệu hóa đơn không hợp lệ',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: Colors.red,
-          colorText: Colors.white);
+      _showManagedSnackbar(
+        'Lỗi',
+        'Dữ liệu hóa đơn không hợp lệ',
+        backgroundColor: Colors.red,
+      );
     }
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _barcodeFocus.requestFocus());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _barcodeFocus.requestFocus();
+    });
     _checkTutorialStatus();
+    _initConnectivityStatus();
+    _listenConnectivity();
     _initVideo();
   }
 
@@ -699,8 +1237,13 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     _barcodeFocus.dispose();
     _qrCtrl?.dispose();
     _qrSub?.cancel();
+    _connectivitySub?.cancel();
     _scanLockTimer?.cancel();
+    _noticeTimer?.cancel();
+    _noticeEntry?.remove();
     _videoCtrl.dispose();
+    _scanSoundPlayer.dispose();
+    _barcodeImageScanner.close();
     _textRecognizer.close();
     _disposeControllerCache(_mainCtrlCache);
     _disposeControllerCache(_promoCtrlCache);
@@ -710,6 +1253,160 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   void _disposeControllerCache(Map<String, _ItemControllers> cache) {
     for (final c in cache.values) c.dispose();
     cache.clear();
+  }
+
+  String get _scanHistoryKey => _invoiceData == null
+      ? ''
+      : 'invoice_scan_history_${_invoiceData!.idInvoice}';
+
+  Future<void> _loadScanHistory() async {
+    if (_scanHistoryKey.isEmpty) return;
+    final historyJson = await _storage.read(key: _scanHistoryKey);
+    if (historyJson == null || historyJson.isEmpty) return;
+    try {
+      final entries = (jsonDecode(historyJson) as List)
+          .map((e) =>
+              _ScanHistoryEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      if (mounted) {
+        setState(() {
+          _scanHistory
+            ..clear()
+            ..addAll(entries);
+        });
+      }
+    } catch (_) {
+      await _storage.delete(key: _scanHistoryKey);
+    }
+  }
+
+  Future<void> _persistScanHistory() async {
+    if (_scanHistoryKey.isEmpty) return;
+    await _storage.write(
+      key: _scanHistoryKey,
+      value: jsonEncode(_scanHistory.map((e) => e.toJson()).toList()),
+    );
+  }
+
+  void _recordScanHistory({
+    required InvoiceDetailTempDto item,
+    required double beforeQty,
+    required double beforeDVT,
+    required double afterQty,
+    required double afterDVT,
+  }) {
+    final entry = _ScanHistoryEntry(
+      productCode: item.productCode ?? '',
+      productName: item.productName ?? item.productCode ?? '',
+      mode: _palletMode?.label ?? (_isXkOrder2 ? 'XK scan' : 'Không rõ'),
+      beforeQty: beforeQty,
+      beforeDVT: beforeDVT,
+      afterQty: afterQty,
+      afterDVT: afterDVT,
+      at: DateTime.now(),
+    );
+    setState(() {
+      _scanHistory.insert(0, entry);
+      if (_scanHistory.length > 100) _scanHistory.removeLast();
+    });
+    _persistScanHistory();
+  }
+
+  void _undoLastScan() {
+    if (_scanHistory.isEmpty) {
+      _showManagedSnackbar(
+        'Thông báo',
+        'Chưa có lần quét nào để hoàn tác',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+    final last = _scanHistory.first;
+    final item = _allItems.firstWhereOrNull(
+      (e) => e.productCode?.toLowerCase() == last.productCode.toLowerCase(),
+    );
+    if (item == null) {
+      _showErrorSnackbar('Không tìm thấy sản phẩm để hoàn tác');
+      return;
+    }
+    setState(() {
+      item.realQuantity = last.beforeQty;
+      item.realQuantityDVT = last.beforeDVT;
+      _scanHistory.removeAt(0);
+    });
+    final cache = (item.spchinh == true) ? _mainCtrlCache : _promoCtrlCache;
+    cache[item.productCode ?? '']?.sync(item);
+    _persistScanHistory();
+    _showManagedSnackbar(
+      'Đã hoàn tác',
+      '${last.productCode}: ${_formatQty(last.afterDVT)} về ${_formatQty(last.beforeDVT)} ĐVT',
+      backgroundColor: Colors.blue.shade700,
+    );
+  }
+
+  void _showScanHistoryDialog() {
+    Get.dialog(_modernDialogShell(
+      title: _modernDialogHeader(
+        icon: Icons.history_rounded,
+        title: 'Lịch sử quét',
+        subtitle: _scanHistory.isEmpty
+            ? 'Chưa có thao tác'
+            : '${_scanHistory.length} thao tác gần nhất',
+        color: kPrimaryColor,
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: _scanHistory.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Text('Chưa có lịch sử quét cho hóa đơn này.'),
+              )
+            : ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 420),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _scanHistory.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final entry = _scanHistory[index];
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        backgroundColor: kPrimaryColor.withOpacity(0.12),
+                        child: Text('${index + 1}',
+                            style: const TextStyle(
+                                color: kPrimaryColor,
+                                fontWeight: FontWeight.w800)),
+                      ),
+                      title: Text(entry.productCode,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      subtitle: Text(
+                        '${entry.productName}\n${entry.mode} · ${DateFormat('HH:mm:ss dd/MM').format(entry.at)}',
+                      ),
+                      trailing: Text(
+                        '${_formatQty(entry.beforeDVT)} → ${_formatQty(entry.afterDVT)}',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    );
+                  },
+                ),
+              ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Get.back(), child: const Text('Đóng')),
+        ElevatedButton.icon(
+          onPressed: _scanHistory.isEmpty
+              ? null
+              : () {
+                  Get.back();
+                  _undoLastScan();
+                },
+          icon: const Icon(Icons.undo_rounded),
+          label: const Text('Hoàn tác lần cuối'),
+        ),
+      ],
+    ));
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -734,6 +1431,25 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       ]);
     }
     if (mounted) setState(() => _showTutorialBot = false);
+  }
+
+  bool _hasNetwork(dynamic result) {
+    if (result is List<ConnectivityResult>) {
+      return !result.contains(ConnectivityResult.none);
+    }
+    return result != ConnectivityResult.none;
+  }
+
+  Future<void> _initConnectivityStatus() async {
+    final result = await Connectivity().checkConnectivity();
+    if (mounted) setState(() => _isOnline = _hasNetwork(result));
+  }
+
+  void _listenConnectivity() {
+    _connectivitySub = Connectivity().onConnectivityChanged.listen((result) {
+      if (!mounted) return;
+      setState(() => _isOnline = _hasNetwork(result));
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -767,10 +1483,11 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                 (j) => InvoiceDetailTempDto.fromJson(j as Map<String, dynamic>))
             .toList();
         _applyItems(list, fromCache: true);
-        Get.snackbar('Thông báo', 'Đã tải hóa đơn tạm từ bộ nhớ',
-            snackPosition: SnackPosition.BOTTOM,
-            backgroundColor: Colors.blue,
-            colorText: Colors.white);
+        _showManagedSnackbar(
+          'Thông báo',
+          'Đã tải hóa đơn tạm từ bộ nhớ',
+          backgroundColor: Colors.blue,
+        );
         return;
       } catch (_) {
         await _storage.delete(key: key);
@@ -808,8 +1525,9 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
   /// Central method to update product lists + rebuild controller caches.
   void _applyItems(List<InvoiceDetailTempDto> items, {bool fromCache = false}) {
-    final main = items.where((e) => e.spchinh == true).toList();
-    final promo = items.where((e) => e.spchinh == false).toList();
+    final normalizedItems = _mergeDuplicatePromoItems(items);
+    final main = normalizedItems.where((e) => e.spchinh == true).toList();
+    final promo = normalizedItems.where((e) => e.spchinh == false).toList();
 
     _rebuildCache(_mainCtrlCache, main);
     _rebuildCache(_promoCtrlCache, promo);
@@ -851,11 +1569,13 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   // Promo dedup
   // ─────────────────────────────────────────────────────────────────────────
 
-  void _mergeDuplicatePromos() {
-    if (_promoProducts.length <= 1) return;
-
+  List<InvoiceDetailTempDto> _mergeDuplicatePromoItems(
+      List<InvoiceDetailTempDto> items) {
+    final main = items.where((e) => e.spchinh == true).toList();
+    final promos = items.where((e) => e.spchinh == false).toList();
+    if (promos.length <= 1) return items;
     final merged = <String, InvoiceDetailTempDto>{};
-    for (final item in _promoProducts) {
+    for (final item in promos) {
       final code = (item.productCode ?? '').trim();
       if (code.isEmpty) continue;
       if (merged.containsKey(code)) {
@@ -870,7 +1590,21 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       }
     }
 
-    _applyItems([..._mainProducts, ...merged.values]);
+    for (final item in merged.values) {
+      final requestedDVT = _requestedQuantityDVT(item);
+      final actualDVT = item.realQuantityDVT ?? 0;
+      if (requestedDVT > 0 && actualDVT > requestedDVT) {
+        item.realQuantityDVT = requestedDVT;
+        item.realQuantity = requestedDVT / _safeSpecification(item);
+      }
+    }
+
+    return [...main, ...merged.values];
+  }
+
+  void _mergeDuplicatePromos() {
+    if (_promoProducts.length <= 1) return;
+    _applyItems([..._mainProducts, ..._promoProducts]);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -896,7 +1630,15 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     setState(() {
       _cameraActive = false;
       _qrCtrl?.pauseCamera();
+    });
+    _focusBarcodeInputForScannerMode();
+  }
+
+  void _focusBarcodeInputForScannerMode() {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _cameraActive) return;
       _barcodeFocus.requestFocus();
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
     });
   }
 
@@ -935,7 +1677,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                 leading: const Icon(Icons.document_scanner_rounded,
                     color: Color(0xFF00A859)),
                 title: const Text('Chụp barcode'),
-                subtitle: const Text('Dùng camera để nhận diện barcode'),
+                subtitle: const Text('Dùng camera để chụp barcode'),
                 onTap: () {
                   Get.back();
                   _captureOcrImage();
@@ -964,8 +1706,8 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   // ─────────────────────────────────────────────────────────────────────────
 
   void _playScanSound() async {
-    final player = AudioPlayer();
-    await player.play(AssetSource(_kScanSoundAsset));
+    await _scanSoundPlayer.stop();
+    await _scanSoundPlayer.play(AssetSource(_kScanSoundAsset));
     if (await Vibration.hasVibrator() ?? false)
       Vibration.vibrate(duration: 100);
   }
@@ -973,37 +1715,49 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   Future<void> _processBarcode(String barcode,
       {bool fromCamera = false}) async {
     final trimmed = barcode.trim();
-    if (trimmed.isEmpty || _isProcessingScan || _isScanLocked) return;
+    if (trimmed.isEmpty || _isScanLocked) return;
+    if (_isProcessingScan) {
+      if (!fromCamera) _queueManualBarcode(trimmed);
+      return;
+    }
 
     final now = DateTime.now();
     final isDuplicateCameraScan = fromCamera &&
         _lastProcessedBarcode == trimmed &&
         _lastProcessedAt != null &&
         now.difference(_lastProcessedAt!) < _kDuplicateScanWindow;
-    if (isDuplicateCameraScan) return;
+    if (isDuplicateCameraScan) {
+      return;
+    }
 
     _isProcessingScan = true;
     _lastProcessedBarcode = trimmed;
     _lastProcessedAt = now;
 
-    _barcodeFocus.unfocus();
+    if (fromCamera) {
+      _barcodeFocus.unfocus();
+    }
 
     try {
       if (_palletMode == null) {
-        Fluttertoast.showToast(
-          msg: 'Chưa chọn hình thức',
-          gravity: ToastGravity.BOTTOM,
+        _showManagedSnackbar(
+          'Cảnh báo',
+          'Chưa chọn hình thức',
           backgroundColor: Colors.orange,
-          textColor: Colors.white,
         );
         return;
       }
 
       if (mounted) {
-        setState(() {
-          _barcodeCtrl.text = trimmed;
+        if (fromCamera) {
+          setState(() {
+            _barcodeCtrl.text = trimmed;
+            _hasScan = true;
+          });
+        } else {
           _hasScan = true;
-        });
+          _barcodeCtrl.clear();
+        }
       }
 
       if (fromCamera) {
@@ -1013,25 +1767,68 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       }
     } finally {
       if (fromCamera) await Future.delayed(_kScanCooldown);
+      _lastProcessedAt = DateTime.now();
       _isProcessingScan = false;
+      if (!fromCamera && mounted) {
+        _prepareManualBarcodeInputForNextScan();
+      }
+      if (!fromCamera) _processNextQueuedManualScan();
     }
   }
 
-  Future<void> _processCameraScan(String raw) async {
-    Get.dialog(const Center(child: CircularProgressIndicator()),
-        barrierDismissible: false);
+  void _queueManualBarcode(String barcode) {
+    if (_pendingManualScans.length >= 20) {
+      _pendingManualScans.removeFirst();
+    }
+    _pendingManualScans.addLast(barcode);
+    _prepareManualBarcodeInputForNextScan();
+  }
 
+  void _processNextQueuedManualScan() {
+    if (_pendingManualScans.isEmpty || _isProcessingScan || _isScanLocked) {
+      return;
+    }
+    final nextBarcode = _pendingManualScans.removeFirst();
+    Future.microtask(() => _processBarcode(nextBarcode));
+  }
+
+  void _prepareManualBarcodeInputForNextScan() {
+    _barcodeCtrl.clear();
+    if (_hasScan && mounted) setState(() => _hasScan = false);
+    _refocusManualBarcodeInput();
+  }
+
+  void _refocusManualBarcodeInput() {
+    void focusIfNeeded() {
+      if (!mounted || _cameraActive) return;
+      if (!_barcodeFocus.hasFocus) _barcodeFocus.requestFocus();
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
+    }
+
+    focusIfNeeded();
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      focusIfNeeded();
+    });
+    Future.delayed(const Duration(milliseconds: 80), focusIfNeeded);
+    Future.delayed(const Duration(milliseconds: 220), focusIfNeeded);
+    Future.delayed(const Duration(milliseconds: 500), focusIfNeeded);
+  }
+
+  Future<void> _processCameraScan(String raw) async {
     try {
+      _showScanLookupStatus('Đã nhận diện barcode: $raw\nĐang tra mã SP...');
       final productCode = _extractProductCodeFromQR(raw);
       if (productCode != null && productCode.isNotEmpty) {
         _handleFoundProduct(productCode, updateQty: true);
+        _showScanLookupStatus(
+          'Đã nhận diện barcode: $raw\nMã SP: $productCode',
+          backgroundColor: Colors.green,
+        );
       } else {
-        await _handleBarcodeBoxScan(raw);
+        await _handleBarcodeBoxScan(raw, showLookupFeedback: true);
       }
     } catch (e) {
       _showErrorSnackbar('QR/Barcode không hợp lệ: $e');
-    } finally {
-      if (Get.isDialogOpen == true) Get.back();
     }
   }
 
@@ -1040,9 +1837,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       (e) => e.productCode?.toLowerCase() == code.toLowerCase(),
     );
     if (idx == -1) {
-      Get.dialog(const Center(child: CircularProgressIndicator()),
-          barrierDismissible: false);
-      await _handleBarcodeBoxScan(code);
+      await _handleBarcodeBoxScan(code, showLookupFeedback: true);
       return;
     }
     final item = _allItems[idx];
@@ -1051,6 +1846,10 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     setState(() => _lastScannedCode = code);
     _bringToTop(idx);
     _mergeDuplicatePromos();
+    _showScanLookupStatus(
+      'Đã nhận diện barcode: $code\nMã SP: ${item.productCode ?? code}',
+      backgroundColor: Colors.green,
+    );
 
     SchedulerBinding.instance.addPostFrameCallback((_) {
       setState(() {
@@ -1066,13 +1865,30 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     });
   }
 
-  Future<void> _handleBarcodeBoxScan(String barcode) async {
-    final codesFromApi =
-        await _invoiceTempRepo.findProductCodeByBarcodeThung(barcode);
-    if (Get.isDialogOpen == true) Get.back();
+  Future<void> _handleBarcodeBoxScan(
+    String barcode, {
+    bool closeLoadingDialog = false,
+    bool showLookupFeedback = false,
+  }) async {
+    final lookupCandidates = _barcodeLookupCandidates(barcode);
+    var matchedBarcode = barcode.trim();
+    var codesFromApi = <String>[];
+    try {
+      for (final candidate in lookupCandidates) {
+        final codes = await _lookupProductCodesByBarcode(candidate);
+        if (codes.isNotEmpty) {
+          matchedBarcode = candidate;
+          codesFromApi = codes;
+          break;
+        }
+      }
+    } finally {
+      if (closeLoadingDialog && Get.isDialogOpen == true) Get.back();
+    }
 
     if (codesFromApi.isEmpty) {
-      _showErrorSnackbar('Không tìm thấy sản phẩm cho barcode: $barcode');
+      _showErrorSnackbar(
+          'Không tìm thấy sản phẩm cho barcode: ${lookupCandidates.join(' / ')}');
       return;
     }
 
@@ -1093,6 +1909,15 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
     if (selected == null) return;
     _handleFoundProduct(selected, updateQty: true);
+    if (showLookupFeedback) {
+      final displayBarcode = matchedBarcode == barcode.trim()
+          ? barcode
+          : '$barcode → $matchedBarcode';
+      _showScanLookupStatus(
+        'Đã nhận diện barcode: $displayBarcode\nMã SP: $selected',
+        backgroundColor: Colors.green,
+      );
+    }
   }
 
   void _handleFoundProduct(String code, {required bool updateQty}) {
@@ -1127,42 +1952,49 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   bool _updateQuantities(InvoiceDetailTempDto item) {
     final spec = _safeSpecification(item);
     final maxDVT = _requestedQuantityDVT(item);
-
     double newQty = item.realQuantity ?? 0;
     double newQtyDVT = item.realQuantityDVT ?? 0;
-
-    switch (_palletMode) {
-      case PalletMode.palletChan:
-        newQty += (item.boxQuantity ?? 1);
-        newQtyDVT = newQty * spec;
-        break;
-      case PalletMode.palletLe:
-        newQty += 1;
-        newQtyDVT = newQty * spec;
-        break;
-      case PalletMode.leDonViTinh:
-        newQtyDVT += 1;
-        newQty = newQtyDVT / spec;
-        break;
-      case null:
-        return false;
+    final beforeQty = newQty;
+    final beforeDVT = newQtyDVT;
+    if (_isXkOrder) {
+      newQty += 1;
+      newQtyDVT = newQty * spec;
+    } else {
+      switch (_palletMode) {
+        case PalletMode.palletChan:
+          newQty += (item.boxQuantity ?? 1);
+          newQtyDVT = newQty * spec;
+          break;
+        case PalletMode.palletLe:
+          newQty += 1;
+          newQtyDVT = newQty * spec;
+          break;
+        case PalletMode.leDonViTinh:
+          newQtyDVT += 1;
+          newQty = newQtyDVT / spec;
+          break;
+        case null:
+          return false;
+      }
     }
-
     if (newQtyDVT > maxDVT) {
       _showErrorSnackbar(
           'Số lượng thực tế (ĐVT) không được vượt quá SLYC: ${_formatQty(maxDVT)}');
       return false;
     }
-
     item.realQuantity = newQty;
     item.realQuantityDVT = newQtyDVT;
-
-    // Sync controllers
     final codeKey = item.productCode ?? '';
     final cache = (item.spchinh == true) ? _mainCtrlCache : _promoCtrlCache;
     cache[codeKey]?.sync(item);
+    _recordScanHistory(
+      item: item,
+      beforeQty: beforeQty,
+      beforeDVT: beforeDVT,
+      afterQty: newQty,
+      afterDVT: newQtyDVT,
+    );
     _showAiWarningForItem(item);
-
     return true;
   }
 
@@ -1218,20 +2050,13 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   void _showErrorSnackbar(String message) {
     if (_hasShownError) return;
     _hasShownError = true;
-    Get.snackbar(
+    _showManagedSnackbar(
       'Lỗi',
       message,
-      snackPosition: SnackPosition.BOTTOM,
       backgroundColor: Colors.red.shade700,
-      colorText: Colors.white,
       duration: const Duration(seconds: 3),
-      snackStyle: SnackStyle.FLOATING,
-      margin: const EdgeInsets.all(16),
-      borderRadius: 12,
       icon: const Icon(Icons.error_outline_rounded,
           color: Colors.white, size: 28),
-      shouldIconPulse: true,
-      isDismissible: true,
     );
     _lockScanAfterError(longLock: true);
   }
@@ -1260,11 +2085,11 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
   void _onPermissionSet(BuildContext ctx, QRViewController ctrl, bool p) {
     if (!p) {
-      Fluttertoast.showToast(
-          msg: 'Không có quyền bật camera',
-          gravity: ToastGravity.BOTTOM,
-          backgroundColor: Colors.red,
-          textColor: Colors.white);
+      _showManagedSnackbar(
+        'Lỗi',
+        'Không có quyền bật camera',
+        backgroundColor: Colors.red,
+      );
     }
   }
 
@@ -1282,20 +2107,21 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       final qty = _parseQty(ctrl.qty.text);
       final qtyDVT = _parseQty(ctrl.qtyDVT.text);
       final maxDVT = _requestedQuantityDVT(item);
+      final isPromo = item.spchinh == false;
       final calcDVT = qty * _safeSpecification(item);
-      final realDVT = qtyDVT > 0 ? qtyDVT : calcDVT;
+      final realDVT = isPromo ? qtyDVT : (qtyDVT > 0 ? qtyDVT : calcDVT);
 
-      if (realDVT > maxDVT || calcDVT > maxDVT) {
-        Get.snackbar('Lỗi',
-            'Sản phẩm "${item.productName}" vượt số lượng yêu cầu: ${_formatQty(maxDVT)} ĐVT',
-            snackPosition: SnackPosition.BOTTOM,
-            backgroundColor: Colors.red,
-            colorText: Colors.white,
-            duration: const Duration(seconds: 3));
+      if (realDVT > maxDVT || (!isPromo && calcDVT > maxDVT)) {
+        _showManagedSnackbar(
+          'Lỗi',
+          'Sản phẩm "${item.productName}" vượt số lượng yêu cầu: ${_formatQty(maxDVT)} ĐVT',
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        );
         return false;
       }
 
-      item.realQuantity = qtyDVT > 0 ? qtyDVT / _safeSpecification(item) : qty;
+      item.realQuantity = qtyDVT > 0 ? _qtyFromDVT(item, qtyDVT) : qty;
       item.realQuantityDVT = realDVT;
       final batch = ctrl.batchCode.text.trim();
       item.noteBatchCode = batch.isEmpty ? null : batch;
@@ -1340,14 +2166,16 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     return showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.psychology_alt_rounded,
-                color: canContinue ? Colors.orange : Colors.red),
-            const SizedBox(width: 10),
-            Expanded(child: Text(title)),
-          ],
+      builder: (_) => _modernDialogShell(
+        title: _modernDialogHeader(
+          icon: canContinue
+              ? Icons.warning_amber_rounded
+              : Icons.error_outline_rounded,
+          title: title,
+          subtitle: canContinue
+              ? 'Có thể lưu nhưng nên kiểm tra lại'
+              : 'Cần xử lý trước khi tiếp tục',
+          color: canContinue ? Colors.orange : Colors.red,
         ),
         content: SizedBox(
           width: double.maxFinite,
@@ -1356,14 +2184,27 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
             children: [
               ...displayAlerts.map((alert) => ListTile(
                     dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      alert.severity == _AiAlertSeverity.blocker
-                          ? Icons.error_outline_rounded
-                          : Icons.warning_amber_rounded,
-                      color: alert.severity == _AiAlertSeverity.blocker
-                          ? Colors.red
-                          : Colors.orange,
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    tileColor: alert.severity == _AiAlertSeverity.blocker
+                        ? Colors.red.shade50
+                        : Colors.orange.shade50,
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        alert.severity == _AiAlertSeverity.blocker
+                            ? Icons.error_outline_rounded
+                            : Icons.warning_amber_rounded,
+                        color: alert.severity == _AiAlertSeverity.blocker
+                            ? Colors.red
+                            : Colors.orange,
+                      ),
                     ),
                     title: Text(alert.title,
                         style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -1382,6 +2223,12 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           ),
           if (canContinue)
             ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+              ),
               onPressed: () => Navigator.of(context).pop(true),
               child: const Text('Vẫn lưu'),
             ),
@@ -1392,10 +2239,11 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
   void _saveTempLocal() async {
     if (_mainProducts.isEmpty && _promoProducts.isEmpty) {
-      Get.snackbar('Lỗi', 'Chưa có sản phẩm nào để lưu',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: Colors.red,
-          colorText: Colors.white);
+      _showManagedSnackbar(
+        'Lỗi',
+        'Chưa có sản phẩm nào để lưu',
+        backgroundColor: Colors.red,
+      );
       return;
     }
 
@@ -1413,19 +2261,29 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
         value: jsonEncode(_allItems.map((e) => e.toJson()).toList()),
       );
       Get.back(result: {'action': 'temp_saved'});
-      Get.snackbar('Thành công', 'Đã lưu tạm thành công',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: Colors.green,
-          colorText: Colors.white);
+      _showManagedSnackbar(
+        'Thành công',
+        'Đã lưu tạm thành công',
+        backgroundColor: Colors.green,
+      );
     } catch (e) {
-      Get.snackbar('Lỗi', 'Lưu tạm thất bại: $e',
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: Colors.red,
-          colorText: Colors.white);
+      _showManagedSnackbar(
+        'Lỗi',
+        'Lưu tạm thất bại: $e',
+        backgroundColor: Colors.red,
+      );
     }
   }
 
   void _saveInvoiceDetailTemp() async {
+    if (!_isOnline) {
+      _showManagedSnackbar(
+        'Mất kết nối',
+        'Không thể Hoàn thành khi mất mạng. Vui lòng lưu tạm và thử lại khi có kết nối.',
+        backgroundColor: Colors.red,
+      );
+      return;
+    }
     if (!await _confirmAiAlertsBeforeSave(includeMissing: true)) return;
     if (await _showInvoiceSummaryDialog(canContinue: true) != true) return;
 
@@ -1457,6 +2315,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           'savedAt': DateTime.now().toIso8601String(),
           'reason': reason,
           'items': _allItems.map((e) => e.toJson()).toList(),
+          'scanHistory': _scanHistory.map((e) => e.toJson()).toList(),
         }),
       ),
     ]);
@@ -1475,16 +2334,21 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   // ─────────────────────────────────────────────────────────────────────────
 
   void _scrollToSection(GlobalKey firstItemKey, GlobalKey sectionKey) {
-    SchedulerBinding.instance.addPostFrameCallback((_) {
+    void scroll() {
+      if (!mounted) return;
       final ctx = firstItemKey.currentContext ?? sectionKey.currentContext;
       if (ctx == null) return;
-      final box = ctx.findRenderObject() as RenderBox?;
-      if (box == null) return;
-      final offset = (box.localToGlobal(Offset.zero).dy - 30)
-          .clamp(0.0, _scrollCtrl.position.maxScrollExtent);
-      _scrollCtrl.animateTo(offset,
-          duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
-    });
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        alignment: 0.12,
+      );
+    }
+
+    SchedulerBinding.instance.addPostFrameCallback((_) => scroll());
+    Future.delayed(const Duration(milliseconds: 80), scroll);
+    Future.delayed(const Duration(milliseconds: 220), scroll);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1505,39 +2369,184 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   }
 
   void _showHelpDialog() {
-    Get.dialog(AlertDialog(
-      title: const Row(children: [
-        Icon(Icons.help_outline_rounded, color: Color(0xFF00A859)),
-        SizedBox(width: 12),
-        Text('Hướng dẫn sử dụng'),
-      ]),
+    Get.dialog(_modernDialogShell(
+      title: _modernDialogHeader(
+        icon: Icons.help_outline_rounded,
+        title: 'Hướng dẫn quét barcode',
+        subtitle: 'Cách thao tác đúng để nhận diện nhanh và chính xác',
+      ),
       content: SizedBox(
         width: double.maxFinite,
-        height: MediaQuery.of(context).size.height * 0.6,
-        child: ListView(children: [
-          ListTile(
-            leading: const Icon(Icons.play_circle_fill_rounded,
-                color: Color(0xFF00A859)),
-            title: const Text('Quét mã vạch',
-                style: TextStyle(fontWeight: FontWeight.w600)),
-            subtitle: const Text('Cách thao tác máy ảnh để quét mã vạch'),
-            onTap: () => Future.delayed(
-              const Duration(milliseconds: 200),
-              () => _showTutorialVideo(
-                title: 'Hướng dẫn quét mã vạch',
-                description:
-                    'Video này hướng dẫn cách sử dụng camera quét mã vạch trong ứng dụng.',
+        height: MediaQuery.of(context).size.height * 0.68,
+        child: ListView(
+          children: [
+            _buildGuideSection(
+              icon: Icons.qr_code_scanner_rounded,
+              title: 'Quét bằng camera',
+              color: const Color(0xFF00A859),
+              steps: const [
+                'Đưa barcode vào giữa khung quét, giữ điện thoại cách tem khoảng 15 đến 25 cm.',
+                'Giữ máy ổn định 1 đến 2 giây, tránh rung tay hoặc lia máy quá nhanh.',
+                'Đảm bảo barcode đủ sáng, không bị lóa, mờ, cong hoặc che mất vạch.',
+                'Khi quét thành công, sản phẩm sẽ được đưa lên đầu danh sách và số lượng tự cập nhật.',
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildGuideSection(
+              icon: Icons.camera_alt_rounded,
+              title: 'Chụp barcode',
+              color: Colors.blue,
+              steps: const [
+                'Dùng khi camera quét trực tiếp khó nhận hoặc tem barcode nhỏ.',
+                'Chụp rõ toàn bộ barcode, không cắt mất mép trái/phải của mã.',
+                'Giữ ảnh thẳng, đủ sáng, tránh bóng tay và ánh đèn phản chiếu.',
+                'Sau khi nhận diện, kiểm tra sản phẩm, mã lô và số lượng trước khi xác nhận.',
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildGuideSection(
+              icon: Icons.qr_code_2_rounded,
+              title: 'Quét bằng máy quét rời',
+              color: Colors.orange,
+              steps: const [
+                'Chọn chế độ nhập barcode, app sẽ tự focus ô barcode và ẩn bàn phím.',
+                'Quét từng mã một, chờ tiếng bíp ngắn hoặc sản phẩm nhảy lên đầu rồi quét tiếp.',
+                'Nếu quét mã lô hàng xong, app sẽ tự quay lại ô barcode để tiếp tục quét.',
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildGuideSection(
+              icon: Icons.warning_amber_rounded,
+              title: 'Lưu ý để quét nhanh hơn',
+              color: Colors.redAccent,
+              steps: const [
+                'Không quét cùng một barcode liên tục quá nhanh khi màn hình chưa cập nhật.',
+                'Nếu báo không tìm thấy sản phẩm, kiểm tra lại barcode có thuộc đơn hàng hiện tại không.',
+                'Với đơn XK chỉ quét, không nhập tay số lượng, hệ thống sẽ tự cộng số lượng theo barcode.',
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: ListTile(
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                leading: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00A859).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(Icons.play_circle_fill_rounded,
+                      color: Color(0xFF00A859)),
+                ),
+                title: const Text('Quét mã vạch',
+                    style: TextStyle(fontWeight: FontWeight.w800)),
+                subtitle: const Text('Cách thao tác máy ảnh để quét mã vạch'),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Future.delayed(
+                  const Duration(milliseconds: 200),
+                  () => _showTutorialVideo(
+                    title: 'Hướng dẫn quét mã vạch',
+                    description:
+                        'Video này hướng dẫn cách sử dụng camera quét mã vạch trong ứng dụng.',
+                  ),
+                ),
               ),
             ),
-          ),
-          const Divider(height: 1),
-        ]),
+          ],
+        ),
       ),
       actions: [
         TextButton(onPressed: () => Get.back(), child: const Text('Đóng'))
       ],
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ));
+  }
+
+  Widget _buildGuideSection({
+    required IconData icon,
+    required String title,
+    required Color color,
+    required List<String> steps,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.16)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...steps.asMap().entries.map(
+                (entry) => _buildGuideStep(entry.key + 1, entry.value, color),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuideStep(int index, String text, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Text(
+                '$index',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: Colors.grey.shade800,
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showTutorialVideo({required String title, String? description}) async {
@@ -1589,10 +2598,11 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       _saveCompletedSnapshotLocal().then((_) {
         if (!mounted) return;
         Get.back(result: {'action': 'completed'});
-        Get.snackbar('Thành công', 'Lưu phiếu xuất tạm thành công',
-            snackPosition: SnackPosition.BOTTOM,
-            backgroundColor: Colors.green,
-            colorText: Colors.white);
+        _showManagedSnackbar(
+          'Thành công',
+          'Lưu phiếu xuất tạm thành công',
+          backgroundColor: Colors.green,
+        );
         _storage.delete(key: 'invoice_temp_${_invoiceData!.idInvoice}');
         _storage.delete(
             key: 'invoice_pending_complete_${_invoiceData!.idInvoice}');
@@ -1613,12 +2623,10 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     } else if (state is InvoiceDetailTempError) {
       _savePendingCompletionLocal(state.message).then((_) {
         if (!mounted) return;
-        Get.snackbar(
+        _showManagedSnackbar(
           'Chờ đồng bộ',
           'Mạng/API lỗi nên phiếu đã được lưu chờ đồng bộ. Vui lòng thử lại khi mạng ổn định.',
-          snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.orange,
-          colorText: Colors.white,
           duration: const Duration(seconds: 4),
         );
         Get.back(result: {'action': 'pending_sync'});
@@ -1658,6 +2666,10 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                 ),
                 _appBarIconButton(Icons.refresh_rounded,
                     onPressed: _loadInvoiceDetails, tooltip: 'Làm mới'),
+                _appBarIconButton(Icons.history_rounded,
+                    size: 22,
+                    onPressed: _showScanHistoryDialog,
+                    tooltip: 'Lịch sử quét'),
                 _appBarIconButton(Icons.help_outline_rounded,
                     size: 22,
                     onPressed: _showHelpDialog,
@@ -1733,8 +2745,10 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                   _buildInlineInvoiceSummary(theme),
                   const SizedBox(height: 16),
                   _buildPalletModeSelector(),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 14),
                   _buildBarcodeField(theme),
+                  const SizedBox(height: 10),
+                  _buildScanTipCard(theme),
                   const SizedBox(height: 16),
                   _buildSavedCheckbox(),
                   const SizedBox(height: 24),
@@ -1791,86 +2805,257 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   }
 
   Widget _buildCameraView() {
-    return Stack(
-      children: [
-        Container(
-          height: 240,
-          margin: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 15,
-                  offset: const Offset(0, 5))
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: QRView(
-              key: _qrKey,
-              onQRViewCreated: _onQRViewCreated,
-              onPermissionSet: (ctrl, p) => _onPermissionSet(context, ctrl, p),
-              overlay: QrScannerOverlayShape(
-                borderColor: Colors.red,
-                borderRadius: 12,
-                borderLength: 30,
-                borderWidth: 10,
-                cutOutSize: MediaQuery.of(context).size.width * 0.7,
-              ),
-              formatsAllowed: _kBarcodeFormats,
-            ),
-          ),
-        ),
-        Positioned(
-          left: 28,
-          right: 28,
-          bottom: 26,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.58),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.center_focus_strong_rounded,
-                    color: Colors.white, size: 18),
-                SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    'Đưa mã vào giữa khung để quét nhanh hơn',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600),
-                    textAlign: TextAlign.center,
+    final screen = MediaQuery.of(context).size;
+    final padding = MediaQuery.of(context).padding;
+    final isTablet = screen.shortestSide >= 600;
+    final isLandscape = screen.width > screen.height;
+    final usableHeight = screen.height - padding.top - padding.bottom;
+    final preferredCameraHeight =
+        usableHeight * (isLandscape ? 0.48 : (isTablet ? 0.42 : 0.34));
+    final minCameraHeight = isLandscape ? 190.0 : (isTablet ? 320.0 : 210.0);
+    final maxCameraHeight = isLandscape ? 320.0 : (isTablet ? 560.0 : 390.0);
+    final cameraHeight = preferredCameraHeight < minCameraHeight
+        ? minCameraHeight
+        : preferredCameraHeight > maxCameraHeight
+            ? maxCameraHeight
+            : preferredCameraHeight;
+    final theme = Theme.of(context);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          )
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: SizedBox(
+          height: cameraHeight,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final panelWidth = constraints.maxWidth;
+              final panelHeight = constraints.maxHeight;
+              final heightCutOutLimit =
+                  panelHeight * (isLandscape ? 0.58 : (isTablet ? 0.74 : 0.68));
+              final widthCutOutLimit = panelWidth * (isTablet ? 0.78 : 0.74);
+              final safeMaxCutOut = heightCutOutLimit < widthCutOutLimit
+                  ? heightCutOutLimit
+                  : widthCutOutLimit;
+              final preferredMinCutOut =
+                  isLandscape ? 150.0 : (isTablet ? 280.0 : 180.0);
+              final safeMinCutOut = safeMaxCutOut < preferredMinCutOut
+                  ? safeMaxCutOut
+                  : preferredMinCutOut;
+              final preferredCutOut = panelWidth * (isTablet ? 0.72 : 0.68);
+              final cutOutSize = preferredCutOut < safeMinCutOut
+                  ? safeMinCutOut
+                  : preferredCutOut > safeMaxCutOut
+                      ? safeMaxCutOut
+                      : preferredCutOut;
+              final compact = panelHeight < 260;
+
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  QRView(
+                    key: _qrKey,
+                    onQRViewCreated: _onQRViewCreated,
+                    onPermissionSet: (ctrl, p) =>
+                        _onPermissionSet(context, ctrl, p),
+                    overlay: QrScannerOverlayShape(
+                      borderColor: theme.primaryColor,
+                      borderRadius: 14,
+                      borderLength: compact ? 26 : 34,
+                      borderWidth: compact ? 7 : 9,
+                      cutOutSize: cutOutSize,
+                    ),
+                    formatsAllowed: _kBarcodeFormats,
                   ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        Positioned(
-          top: 20,
-          right: 20,
-          child: GestureDetector(
-            onTap: _enableManualInput,
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.red.shade400,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 8)
+                  Positioned(
+                    left: 12,
+                    right: 12,
+                    top: 12,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _buildCameraPill(
+                            icon: Icons.qr_code_scanner_rounded,
+                            text: _palletMode == null
+                                ? 'Chưa chọn hình thức'
+                                : 'Đang quét: ${_palletMode!.label}',
+                            color: _palletMode == null
+                                ? Colors.orange
+                                : theme.primaryColor,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: _enableManualInput,
+                          child: _buildCameraRoundButton(
+                            icon: Icons.keyboard_rounded,
+                            color: Colors.black.withValues(alpha: 0.58),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    left: 14,
+                    right: 14,
+                    bottom: 14,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (!compact) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.58),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.12)),
+                            ),
+                            child: const Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.center_focus_strong_rounded,
+                                    color: Colors.white, size: 18),
+                                SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    'Giữ barcode trong khung, đủ sáng và không rung tay',
+                                    style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildCameraActionButton(
+                                icon: Icons.document_scanner_rounded,
+                                label: 'Chụp barcode',
+                                onTap: _captureOcrImage,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _buildCameraActionButton(
+                                icon: Icons.help_outline_rounded,
+                                label: 'Hướng dẫn',
+                                onTap: _showHelpDialog,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
-              ),
-              child: const Icon(Icons.close, color: Colors.white, size: 20),
-            ),
+              );
+            },
           ),
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _buildCameraPill({
+    required IconData icon,
+    required String text,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 17),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCameraRoundButton({
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Icon(icon, color: Colors.white, size: 20),
+    );
+  }
+
+  Widget _buildCameraActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: Theme.of(context).primaryColor, size: 18),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.grey.shade800,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2209,7 +3394,10 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     final theme = Theme.of(context);
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => _palletMode = isSelected ? null : mode),
+        onTap: () {
+          setState(() => _palletMode = isSelected ? null : mode);
+          if (!_cameraActive) _focusBarcodeInputForScannerMode();
+        },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
@@ -2244,191 +3432,269 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
 
   Widget _buildBarcodeField(ThemeData theme) {
     return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: _barcodeFocus.hasFocus
+              ? theme.primaryColor.withValues(alpha: 0.25)
+              : Colors.grey.shade100,
+        ),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 12)
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
+          )
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: TypeAheadField<String>(
-              builder: (context, controller, focusNode) {
-                _barcodeCtrl = controller;
-                _barcodeFocus = focusNode;
-                return TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  readOnly: _cameraActive,
-                  showCursor: !_cameraActive,
-                  textInputAction: TextInputAction.done,
-                  onChanged: (_) => setState(() => _hasScan = false),
-                  onSubmitted: (v) {
-                    if (!_cameraActive && v.trim().isNotEmpty) {
-                      _processBarcode(v.trim());
-                    }
-                  },
-                  decoration: InputDecoration(
-                    hintText: 'Quét hoặc nhập mã vạch / mã SP',
-                    hintStyle:
-                        TextStyle(color: Colors.grey.shade400, fontSize: 14),
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 16),
-                    prefixIcon: Container(
-                      margin: const EdgeInsets.only(left: 12, right: 8),
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: theme.primaryColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(Icons.qr_code_scanner_rounded,
-                          size: 22, color: theme.primaryColor),
-                    ),
-                    suffixIcon: controller.text.isNotEmpty
-                        ? IconButton(
-                            icon: Icon(Icons.close_rounded,
-                                size: 20, color: Colors.grey.shade500),
-                            onPressed: () {
-                              controller.clear();
-                              setState(() => _hasScan = false);
-                            },
-                          )
-                        : null,
+          Row(
+            children: [
+              Icon(Icons.qr_code_2_rounded,
+                  color: theme.primaryColor, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _cameraActive
+                      ? 'Camera đang quét barcode'
+                      : 'Ô barcode cho máy quét rời',
+                  style: TextStyle(
+                    color: Colors.grey.shade800,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
                   ),
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w500),
-                );
-              },
-              debounceDuration: const Duration(milliseconds: 300),
-              hideOnEmpty: true,
-              hideOnLoading: true,
-              hideOnError: true,
-              hideOnUnfocus: false,
-              hideWithKeyboard: false,
-              suggestionsCallback: (pattern) async {
-                if (_cameraActive || pattern.trim().isEmpty || _hasScan)
-                  return [];
-                final lower = pattern.trim().toLowerCase();
-                return _allItems
-                    .where((e) =>
-                        e.productCode?.toLowerCase().contains(lower) == true ||
-                        e.productName?.toLowerCase().contains(lower) == true)
-                    .map((e) => e.productCode!)
-                    .toSet()
-                    .toList();
-              },
-              itemBuilder: (_, code) {
-                final product =
-                    _allItems.firstWhere((e) => e.productCode == code);
-                return Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: theme.primaryColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(Icons.inventory_2_rounded,
-                            size: 18, color: theme.primaryColor),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(product.productCode ?? '',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: theme.primaryColor)),
-                            const SizedBox(height: 2),
-                            Text(product.productName ?? '',
-                                style: TextStyle(
-                                    fontSize: 12, color: Colors.grey.shade600),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis),
-                          ],
-                        ),
-                      ),
-                    ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: (_cameraActive ? Colors.green : Colors.blue)
+                      .withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  _cameraActive ? 'Camera' : 'Máy quét',
+                  style: TextStyle(
+                    color: _cameraActive ? Colors.green : Colors.blue,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
                   ),
-                );
-              },
-              onSelected: (code) {
-                final isPromo =
-                    _promoProducts.any((e) => e.productCode == code);
-
-                setState(() {
-                  _isFromTypeAheadSelection = true;
-                  _hasScan = true;
-                  if (isPromo)
-                    _showPromoTable = true;
-                  else
-                    _showOrderTable = true;
-                });
-
-                _barcodeCtrl.text = code;
-                FocusScope.of(context).unfocus();
-
-                // Cập nhật số lượng + đưa lên đầu
-                _processBarcode(code);
-
-                // Scroll tới item sau khi UI rebuild xong
-                SchedulerBinding.instance.addPostFrameCallback((_) {
-                  _scrollToSection(
-                    isPromo ? _firstPromoKey : _firstMainKey,
-                    isPromo ? _promoSectionKey : _mainSectionKey,
-                  );
-                });
-              },
-              loadingBuilder: (_) => const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                ),
               ),
-              emptyBuilder: (_) => Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('Không tìm thấy sản phẩm',
-                    style: TextStyle(color: Colors.grey.shade500)),
-              ),
-            ),
+            ],
           ),
-          Container(height: 56, width: 1, color: Colors.grey.shade200),
-          GestureDetector(
-            onTap: _showScanOptions,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TypeAheadField<String>(
+                  builder: (context, controller, focusNode) {
+                    _barcodeCtrl = controller;
+                    _barcodeFocus = focusNode;
+                    return TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      readOnly: _cameraActive,
+                      showCursor: !_cameraActive,
+                      keyboardType: TextInputType.none,
+                      textInputAction: TextInputAction.done,
+                      onTap: () {
+                        SystemChannels.textInput.invokeMethod('TextInput.hide');
+                      },
+                      onChanged: (_) {
+                        if (_hasScan) _hasScan = false;
+                      },
+                      onSubmitted: (v) {
+                        if (!_cameraActive && v.trim().isNotEmpty) {
+                          _processBarcode(v.trim());
+                        }
+                      },
+                      onEditingComplete: () {},
+                      decoration: InputDecoration(
+                        hintText: 'Quét hoặc nhập mã vạch / mã SP',
+                        hintStyle: TextStyle(
+                            color: Colors.grey.shade400, fontSize: 14),
+                        filled: true,
+                        fillColor: Colors.grey.shade50,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 14),
+                        prefixIcon: Icon(Icons.document_scanner_rounded,
+                            size: 22, color: theme.primaryColor),
+                        suffixIcon: controller.text.isNotEmpty
+                            ? IconButton(
+                                icon: Icon(Icons.close_rounded,
+                                    size: 20, color: Colors.grey.shade500),
+                                onPressed: () {
+                                  controller.clear();
+                                  setState(() => _hasScan = false);
+                                },
+                              )
+                            : null,
+                      ),
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600),
+                    );
+                  },
+                  debounceDuration: const Duration(milliseconds: 300),
+                  hideOnEmpty: true,
+                  hideOnLoading: true,
+                  hideOnError: true,
+                  hideOnUnfocus: false,
+                  hideWithKeyboard: false,
+                  suggestionsCallback: (pattern) async {
+                    if (_cameraActive || pattern.trim().isEmpty || _hasScan) {
+                      return [];
+                    }
+                    final lower = pattern.trim().toLowerCase();
+                    return _allItems
+                        .where((e) =>
+                            e.productCode?.toLowerCase().contains(lower) ==
+                                true ||
+                            e.productName?.toLowerCase().contains(lower) ==
+                                true)
+                        .map((e) => e.productCode!)
+                        .toSet()
+                        .toList();
+                  },
+                  itemBuilder: (_, code) {
+                    final product =
+                        _allItems.firstWhere((e) => e.productCode == code);
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: theme.primaryColor.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(Icons.inventory_2_rounded,
+                                size: 18, color: theme.primaryColor),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(product.productCode ?? '',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: theme.primaryColor)),
+                                const SizedBox(height: 2),
+                                Text(product.productName ?? '',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey.shade600),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  onSelected: (code) {
+                    final isPromo =
+                        _promoProducts.any((e) => e.productCode == code);
+
+                    setState(() {
+                      _isFromTypeAheadSelection = true;
+                      _hasScan = true;
+                      if (isPromo)
+                        _showPromoTable = true;
+                      else
+                        _showOrderTable = true;
+                    });
+
+                    _barcodeCtrl.text = code;
+                    FocusScope.of(context).unfocus();
+                    _processBarcode(code);
+                    SchedulerBinding.instance.addPostFrameCallback((_) {
+                      _scrollToSection(
+                        isPromo ? _firstPromoKey : _firstMainKey,
+                        isPromo ? _promoSectionKey : _mainSectionKey,
+                      );
+                    });
+                  },
+                  loadingBuilder: (_) => const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  ),
+                  emptyBuilder: (_) => Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text('Không tìm thấy sản phẩm',
+                        style: TextStyle(color: Colors.grey.shade500)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _showScanOptions,
+                child: Container(
+                  height: 50,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: _cameraActive ? theme.primaryColor : Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
                       color: _cameraActive
                           ? theme.primaryColor
                           : Colors.grey.shade200,
-                      borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.camera_alt_rounded,
-                        size: 20,
-                        color: _cameraActive
-                            ? Colors.white
-                            : Colors.grey.shade600),
                   ),
-                  const SizedBox(height: 4),
-                  // Text('Quét/chụp',
-                  //     style: TextStyle(
-                  //         fontSize: 10,
-                  //         fontWeight: FontWeight.w600,
-                  //         color: _cameraActive
-                  //             ? theme.primaryColor
-                  //             : Colors.grey.shade500)),
-                ],
+                  child: Icon(
+                    _cameraActive
+                        ? Icons.qr_code_scanner_rounded
+                        : Icons.camera_alt_rounded,
+                    size: 22,
+                    color: _cameraActive ? Colors.white : theme.primaryColor,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScanTipCard(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.primaryColor.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: theme.primaryColor.withValues(alpha: 0.12)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.tips_and_updates_rounded,
+              color: theme.primaryColor, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _cameraActive
+                  ? 'Mẹo: giữ barcode nằm gọn trong khung camera, đủ sáng. Nếu giữ nguyên barcode trong khung, ứng dụng sẽ quét lại sau khoảng 1.6 giây để tăng số lượng.'
+                  : 'Mẹo: máy quét rời cần trỏ nhập vào ô barcode. Sau mỗi lần quét, ứng dụng sẽ tự xoá mã cũ và tự trỏ lại.',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 12,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -2626,12 +3892,18 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     final isLastScanned = item.productCode == _lastScannedCode;
     final accentColor = isPromo ? Colors.orange : Colors.blue;
     final ctrl = cache[item.productCode ?? ''];
+    const canEditQuantity = true;
 
     // Tính toán SLYC
     final double spec = _safeSpecification(item);
-    final double requestedThung = (item.quantity ?? 0) / spec; // ví dụ: 25.89
     final double requestedDVT = (item.quantity ?? 0).toDouble(); // tổng = 233
     final String donvitinh = item.unit ?? '';
+    final isXkKg = _isXkOrder2 && donvitinh.trim().toUpperCase() == 'KG';
+    final double xkKgBoxRatio =
+        (item.slpallet != null && item.slpallet != 0) ? item.slpallet! : spec;
+    final double requestedThung =
+        requestedDVT / (isXkKg ? xkKgBoxRatio : spec); // ví dụ: 25.89
+    final String displayDvtUnit = isXkKg ? '' : donvitinh;
     String displayThung = _formatQty(requestedThung);
     String displayDVT = _formatQty(requestedDVT);
     String? extraLeText;
@@ -2747,7 +4019,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                   displayThung: displayThung,
                   displayDVT: displayDVT,
                   extraLeText: extraLeText,
-                  unit: donvitinh,
+                  unit: displayDvtUnit,
                   progress: progress,
                   color: accentColor,
                 ),
@@ -2768,7 +4040,8 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                           controller: ctrl.qty,
                           label: 'SL Thùng',
                           icon: Icons.inventory_outlined,
-                          enabled: _palletMode != PalletMode.leDonViTinh,
+                          enabled: canEditQuantity &&
+                              _palletMode != PalletMode.leDonViTinh,
                           onTap: () => _selectAllText(ctrl.qty),
                           onEditingComplete: () =>
                               _onQtyChanged(item, ctrl, requestedDVT),
@@ -2780,7 +4053,8 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
                           controller: ctrl.qtyDVT,
                           label: 'SL ĐVT',
                           icon: Icons.straighten_outlined,
-                          enabled: _palletMode != PalletMode.palletLe,
+                          enabled: canEditQuantity &&
+                              _palletMode != PalletMode.palletLe,
                           onTap: () => _selectAllText(ctrl.qtyDVT),
                           onEditingComplete: () =>
                               _onQtyDVTChanged(item, ctrl, requestedDVT),
@@ -2820,6 +4094,14 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       InvoiceDetailTempDto item, _ItemControllers ctrl, num maxQtyDVT) {
     final qty = _parseQty(ctrl.qty.text);
     final calcDVT = qty * _safeSpecification(item);
+    if (item.spchinh == false) {
+      item.realQuantity = qty;
+      ctrl.qty.text = _formatQty(qty);
+      setState(() {});
+      FocusScope.of(context).unfocus();
+      return;
+    }
+
     if (calcDVT > maxQtyDVT) {
       _showQtyError(maxQtyDVT);
       ctrl.qty.text = _formatQty(item.realQuantity ?? 0);
@@ -2843,7 +4125,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
       return;
     }
     item.realQuantityDVT = qtyDVT;
-    item.realQuantity = qtyDVT / _safeSpecification(item);
+    item.realQuantity = _qtyFromDVT(item, qtyDVT);
     ctrl.qtyDVT.text = _formatQty(qtyDVT);
     ctrl.qty.text = _formatQty(item.realQuantity ?? 0);
     setState(() {});
@@ -2855,23 +4137,17 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     final text = ctrl.batchCode.text.trim();
     item.noteBatchCode = text.isEmpty ? null : text;
     FocusScope.of(context).unfocus();
+    _focusBarcodeInputForScannerMode();
   }
 
   void _showQtyError(num maxDVT) {
-    Get.snackbar(
+    _showManagedSnackbar(
       'Lỗi',
       'Số lượng thực tế (ĐVT) không được vượt quá SLYC: ${_formatQty(maxDVT)}',
-      snackPosition: SnackPosition.BOTTOM,
       backgroundColor: Colors.red.shade700,
-      colorText: Colors.white,
       duration: const Duration(seconds: 3),
-      margin: const EdgeInsets.all(16),
-      borderRadius: 12,
-      snackStyle: SnackStyle.FLOATING,
       icon: const Icon(Icons.error_outline_rounded,
           color: Colors.white, size: 28),
-      shouldIconPulse: true,
-      isDismissible: true,
     );
   }
 
@@ -3042,6 +4318,14 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
   }
 
   Widget _buildInfoRow(InvoiceDetailTempDto item) {
+    final unit = item.unit ?? '';
+    final isXkKg = _isXkOrder2 && unit.trim().toUpperCase() == 'KG';
+    final quyCach = isXkKg
+        ? ((item.slpallet != null && item.slpallet != 0)
+            ? item.slpallet
+            : item.specification ?? 1)
+        : item.specification ?? 1;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -3052,8 +4336,7 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
           _buildInfoChip(Icons.layers_outlined, 'Thùng/pallet',
               '${item.boxQuantity ?? 1}'),
           Container(width: 1, height: 24, color: Colors.grey.shade300),
-          _buildInfoChip(Icons.aspect_ratio_rounded, 'Quy cách',
-              '${item.specification ?? 1}'),
+          _buildInfoChip(Icons.aspect_ratio_rounded, 'Quy cách', '$quyCach'),
         ],
       ),
     );
@@ -3166,16 +4449,51 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
               shadowColor: Colors.orange,
               onTap: _saveTempLocal,
             )),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
+            _buildSmallBottomButton(
+              icon: Icons.undo_rounded,
+              tooltip: 'Hoàn tác lần quét cuối',
+              onTap: _undoLastScan,
+              enabled: _scanHistory.isNotEmpty,
+            ),
+            const SizedBox(width: 8),
             Expanded(
                 child: _buildActionButton(
-              label: 'Hoàn thành',
-              icon: Icons.check_circle_rounded,
-              colors: [Colors.green.shade400, Colors.green.shade600],
-              shadowColor: Colors.green,
+              label: _isOnline ? 'Hoàn thành' : 'Mất mạng',
+              icon: _isOnline
+                  ? Icons.check_circle_rounded
+                  : Icons.wifi_off_rounded,
+              colors: _isOnline
+                  ? [Colors.green.shade400, Colors.green.shade600]
+                  : [Colors.grey.shade400, Colors.grey.shade500],
+              shadowColor: _isOnline ? Colors.green : Colors.grey,
               onTap: _saveInvoiceDetailTemp,
+              enabled: _isOnline,
             )),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSmallBottomButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+    required bool enabled,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: enabled ? onTap : null,
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: enabled ? Colors.blue.shade600 : Colors.grey.shade300,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(icon, color: Colors.white),
         ),
       ),
     );
@@ -3187,9 +4505,10 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
     required List<Color> colors,
     required Color shadowColor,
     required VoidCallback onTap,
+    bool enabled = true,
   }) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
@@ -3199,10 +4518,11 @@ class _InvoiceTempScreenState extends State<InvoiceTempScreen> {
               end: Alignment.bottomRight),
           borderRadius: BorderRadius.circular(14),
           boxShadow: [
-            BoxShadow(
-                color: shadowColor.withOpacity(0.4),
-                blurRadius: 12,
-                offset: const Offset(0, 4))
+            if (enabled)
+              BoxShadow(
+                  color: shadowColor.withOpacity(0.4),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4))
           ],
         ),
         child: Row(
@@ -3632,21 +4952,11 @@ class _TutorialVideoDialogState extends State<_TutorialVideoDialog> {
 // ─── Barcode formats ──────────────────────────────────────────────────────────
 
 const _kBarcodeFormats = [
-  BarcodeFormat.aztec,
-  BarcodeFormat.codabar,
-  BarcodeFormat.code39,
-  BarcodeFormat.code93,
   BarcodeFormat.code128,
-  BarcodeFormat.dataMatrix,
+  BarcodeFormat.itf,
   BarcodeFormat.ean8,
   BarcodeFormat.ean13,
-  BarcodeFormat.itf,
-  BarcodeFormat.maxicode,
-  BarcodeFormat.pdf417,
   BarcodeFormat.qrcode,
-  BarcodeFormat.rss14,
-  BarcodeFormat.rssExpanded,
   BarcodeFormat.upcA,
   BarcodeFormat.upcE,
-  BarcodeFormat.upcEanExtension,
 ];

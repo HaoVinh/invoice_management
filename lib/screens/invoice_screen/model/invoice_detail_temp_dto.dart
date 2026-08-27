@@ -13,6 +13,7 @@ class InvoiceDetailTempDto{
    double? unit_price;
    int invoiceTempId;
    String? noteBatchCode;
+   double? slpallet; // Hệ số quy đổi của XK
    String? unit;
   InvoiceDetailTempDto({
     required this.invoiceDetailId,
@@ -28,6 +29,7 @@ class InvoiceDetailTempDto{
     this.unit_price,
     required this.invoiceTempId,
     this.noteBatchCode,
+    this.slpallet,
     this.unit,
   });
 
@@ -50,6 +52,7 @@ class InvoiceDetailTempDto{
        invoiceTempId: json['invoiceTempId'],
        realQuantity: (json['realQuantity'] != null) ? json['realQuantity'].toDouble() : null,
        noteBatchCode:  json['noteBatchCode'],
+       slpallet: (json['slpallet'] != null) ? json['slpallet'].toDouble() : null,
        unit: json['unit'],
      );
    }
@@ -67,6 +70,7 @@ class InvoiceDetailTempDto{
        'unit_price': unit_price,
        'invoiceTempId':invoiceTempId,
        'noteBatchCode': noteBatchCode,
+       'slpallet': slpallet,
        'unit': unit,
      };
    }
@@ -84,6 +88,7 @@ class InvoiceDetailTempDto{
      double? unit_price,
      int? invoiceTempId,
      String? noteBatchCode,
+     double? slpallet,
      String? unit,
    }) {
      return InvoiceDetailTempDto(
@@ -100,6 +105,7 @@ class InvoiceDetailTempDto{
        unit_price:  unit_price ?? this.unit_price,
          invoiceTempId: invoiceTempId ?? this.invoiceTempId,
          noteBatchCode: noteBatchCode ?? this.noteBatchCode,
+       slpallet : slpallet ?? this.slpallet,
        unit: unit ?? this.unit,
      );
    }

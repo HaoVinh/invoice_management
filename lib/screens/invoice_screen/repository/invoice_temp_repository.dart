@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../../../repositories/abstract_interface.dart';
 import '../../../repositories/abstract_repository.dart';
 import '../../auth_screen/repository/auth_repostory.dart';
@@ -12,7 +13,6 @@ class InvoiceTempRepository extends AbstractRepository
   final String _finalUrl = '/data/invoicetemp';
   final String _saveUrl = '/data/saveinvoicetemp';
 
-
   Future<String> _getAccessToken() async {
     final token = await AuthRepository().getToken();
     if (token == null || token.isEmpty) {
@@ -21,7 +21,13 @@ class InvoiceTempRepository extends AbstractRepository
     return token;
   }
 
-  Future<List<InvoiceTempDto>> search(query, {required String cm, String? sDate, String? eDate,String? codeNV,String? maNX,String? statusNX}) async {
+  Future<List<InvoiceTempDto>> search(query,
+      {required String cm,
+      String? sDate,
+      String? eDate,
+      String? codeNV,
+      String? maNX,
+      String? statusNX}) async {
     try {
       final url = "$_finalUrl?cm=$cm"
           "${sDate != null ? '&sDate=$sDate' : ''}"
@@ -47,15 +53,18 @@ class InvoiceTempRepository extends AbstractRepository
         final List<dynamic> list = data['dt']['list_invoice_temps'];
         return list.map((item) => InvoiceTempDto.fromJson(item)).toList();
       } else {
-        return Future.error(response.data['msg'] ?? 'Lỗi server: ${response.statusCode}');
+        return Future.error(
+            response.data['msg'] ?? 'Lỗi server: ${response.statusCode}');
       }
     } catch (e) {
       if (e is DioError) {
-        return Future.error(e.response?.data['msg'] ?? 'Lỗi kết nối: ${e.message}');
+        return Future.error(
+            e.response?.data['msg'] ?? 'Lỗi kết nối: ${e.message}');
       }
       return Future.error('Lỗi không xác định: $e');
     }
   }
+
   Future<List<CarDTO>> searchCar(String data) async {
     try {
       final url = "/data/license_plate?dt=$data";
@@ -70,26 +79,30 @@ class InvoiceTempRepository extends AbstractRepository
           return Future.error(data['msg'] ?? 'Lỗi không xác định');
         }
 
-        if (data['dt'] == null ) {
+        if (data['dt'] == null) {
           return [];
         }
 
         final List<dynamic> list = data['dt']['cars'];
         return list.map((item) => CarDTO.fromJson(item)).toList();
       } else {
-        return Future.error(response.data['msg'] ?? 'Lỗi server: ${response.statusCode}');
+        return Future.error(
+            response.data['msg'] ?? 'Lỗi server: ${response.statusCode}');
       }
     } catch (e) {
       if (e is DioError) {
-        return Future.error(e.response?.data['msg'] ?? 'Lỗi kết nối: ${e.message}');
+        return Future.error(
+            e.response?.data['msg'] ?? 'Lỗi kết nối: ${e.message}');
       }
       return Future.error('Lỗi không xác định: $e');
     }
   }
+
   @override
   Future<InvoiceTempDto> create(InvoiceTempDto invoiceTempDto) async {
     throw UnimplementedError();
   }
+
   Future<bool> updateInvoiceTemp(InvoiceTempDto invoiceTempDto) async {
     try {
       final accessToken = await _getAccessToken();
@@ -124,7 +137,8 @@ class InvoiceTempRepository extends AbstractRepository
           throw Exception(msg.isNotEmpty ? msg : 'Lỗi từ server (err: $err)');
         }
       } else {
-        throw Exception('Lỗi server: ${response.statusCode} - ${response.data['msg'] ?? 'Không có thông tin'}');
+        throw Exception(
+            'Lỗi server: ${response.statusCode} - ${response.data['msg'] ?? 'Không có thông tin'}');
       }
     } catch (e) {
       if (e is DioError) {
@@ -136,19 +150,22 @@ class InvoiceTempRepository extends AbstractRepository
       rethrow;
     }
   }
+
   Future<List<String>> findProductCodeByBarcodeThung(String barcode) async {
     if (barcode.trim().isEmpty) {
       return [];
     }
 
     try {
-      final url = "http://192.168.0.2:8380/norm/api/data/huongDanDongGoi?cm=barcode&dt=${barcode.trim()}";
-      final accessToken = "c894b18f-6e51-4bf3-9a3b-0a1c2d7d4211";
+      final barcodeLookupBaseUrl = dotenv.env['BARCODE_LOOKUP_URL'] ??
+          'http://192.168.0.2:8380/norm/api/data/huongDanDongGoi';
+      final url = "$barcodeLookupBaseUrl?cm=barcode&dt=${barcode.trim()}";
+      final accessToken = dotenv.env['BARCODE_LOOKUP_TOKEN'] ?? '';
 
       final response = await get2(
         url: url,
         token: accessToken,
-      ).timeout(const Duration(seconds: 10), onTimeout: () {
+      ).timeout(const Duration(seconds: 3), onTimeout: () {
         throw Exception('API quá chậm, thử lại sau');
       });
 
@@ -187,6 +204,7 @@ class InvoiceTempRepository extends AbstractRepository
       return [];
     }
   }
+
   @override
   Future<void> delete(InvoiceTempDto invoiceTempDto) {
     throw UnimplementedError();

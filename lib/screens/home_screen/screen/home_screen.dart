@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,12 +12,68 @@ import '../../../constants/contains.dart';
 import '../../auth_screen/repository/auth_repostory.dart';
 import '../../invoice_screen/barcode_screens/barcode_screen.dart';
 import '../../invoice_screen/core/invoice_temp_bloc.dart';
+import '../../invoice_screen/pending_sync_screen.dart';
 import '../../invoice_screen/model/car_dto.dart';
 import '../../invoice_screen/model/invoice_temp_dto.dart';
 import '../../invoice_screen/repository/invoice_detail_temp_repository.dart';
 import '../../invoice_screen/screens/invoice_screen.dart';
 import '../../screens.dart';
 import 'package:intl/intl.dart';
+
+enum _InvoiceUiStatus { pendingSync, temp, fresh, done }
+
+enum _InvoiceStatusFilter { all, pendingSync, temp, fresh, done }
+
+class _InvoiceStatusStats {
+  int all = 0;
+  int pendingSync = 0;
+  int temp = 0;
+  int fresh = 0;
+  int done = 0;
+
+  void add(_InvoiceUiStatus status) {
+    all++;
+    switch (status) {
+      case _InvoiceUiStatus.pendingSync:
+        pendingSync++;
+        break;
+      case _InvoiceUiStatus.temp:
+        temp++;
+        break;
+      case _InvoiceUiStatus.fresh:
+        fresh++;
+        break;
+      case _InvoiceUiStatus.done:
+        done++;
+        break;
+    }
+  }
+
+  int countFor(_InvoiceStatusFilter filter) {
+    switch (filter) {
+      case _InvoiceStatusFilter.all:
+        return all;
+      case _InvoiceStatusFilter.pendingSync:
+        return pendingSync;
+      case _InvoiceStatusFilter.temp:
+        return temp;
+      case _InvoiceStatusFilter.fresh:
+        return fresh;
+      case _InvoiceStatusFilter.done:
+        return done;
+    }
+  }
+}
+
+class _ScoredInvoiceEntry {
+  const _ScoredInvoiceEntry({
+    required this.entry,
+    required this.priorityScore,
+  });
+
+  final MapEntry<String, InvoiceTempDto> entry;
+  final int priorityScore;
+}
 
 class HomeInvoiceScreen extends StatefulWidget {
   static const String routeName = '/home-screen';
@@ -50,6 +107,10 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
   bool _isLoadingCodeNV = true;
   String _selectedOrderType = 'LIX'; // 'LIX' hoac 'GIA_CONG'
   String _smartSearchQuery = '';
+  _InvoiceStatusFilter _selectedStatusFilter = _InvoiceStatusFilter.all;
+  DateTime? _lastUpdatedAt;
+  Timer? _smartSearchDebounce;
+  Completer<void>? _refreshCompleter;
   final TextEditingController _smartSearchCtrl = TextEditingController();
   final Map<int, bool> _expandedInvoices = {};
   final Map<int, List<InvoiceDetailTempDto>> _invoiceDetailsCache = {};
@@ -87,9 +148,17 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
   }
 
   Future<void> _applyPersistedTempStates(List<InvoiceTempDto> invoices) async {
-    final exportingIds = (await _loadExportingInvoiceIds()).toSet();
-    final pendingIdsJson =
-        await _storage.read(key: 'pending_completed_invoices');
+    final storageValues = await _storage.readAll();
+    final exportingIdsJson = storageValues['exporting_invoices'];
+    final exportingIds = <String>{};
+    if (exportingIdsJson != null && exportingIdsJson.isNotEmpty) {
+      try {
+        exportingIds.addAll(List<String>.from(jsonDecode(exportingIdsJson)));
+      } catch (e) {
+        print('Error decoding exporting_invoices: $e');
+      }
+    }
+    final pendingIdsJson = storageValues['pending_completed_invoices'];
     _pendingSyncInvoices.clear();
     if (pendingIdsJson != null && pendingIdsJson.isNotEmpty) {
       try {
@@ -101,8 +170,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
 
     for (final invoice in invoices) {
       final id = invoice.idInvoice.toString();
-      final tempJson =
-          await _storage.read(key: 'invoice_temp_${invoice.idInvoice}');
+      final tempJson = storageValues['invoice_temp_${invoice.idInvoice}'];
       invoice.isExporting = exportingIds.contains(id) ||
           (tempJson != null && tempJson.isNotEmpty) ||
           _pendingSyncInvoices.contains(invoice.idInvoice);
@@ -117,8 +185,24 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
 
   @override
   void dispose() {
+    _smartSearchDebounce?.cancel();
     _smartSearchCtrl.dispose();
     super.dispose();
+  }
+
+  void _onSmartSearchChanged(String value) {
+    _smartSearchDebounce?.cancel();
+    _smartSearchDebounce = Timer(const Duration(milliseconds: 280), () {
+      if (!mounted) return;
+      if (value == _smartSearchQuery) return;
+      setState(() => _smartSearchQuery = value);
+    });
+  }
+
+  void _commitSmartSearch(String value) {
+    _smartSearchDebounce?.cancel();
+    if (value == _smartSearchQuery) return;
+    setState(() => _smartSearchQuery = value);
   }
 
   Future<void> _loadCodeNV() async {
@@ -146,7 +230,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
     }
   }
 
-  void _refreshInvoiceList(BuildContext context) {
+  Future<void> _refreshInvoiceList(BuildContext context) {
     if (_codeNV == null) {
       Get.snackbar(
         'Lỗi',
@@ -156,8 +240,13 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
         colorText: Colors.white,
         duration: const Duration(seconds: 2),
       );
-      return;
+      return Future.value();
     }
+    if (_refreshCompleter?.isCompleted == false) {
+      _refreshCompleter?.complete();
+    }
+    final completer = Completer<void>();
+    _refreshCompleter = completer;
     print(
         'Đang làm mới danh sách hóa đơn của mã NV: $_codeNV, loại: $_selectedOrderType');
     context.read<InvoiceTempBloc>().add(FetchInvoiceTempsEvent(
@@ -168,6 +257,16 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
           maNX: _selectedOrderType == 'GIA_CONG' ? 'D' : null,
           statusNX: '0',
         ));
+    return completer.future.timeout(
+      const Duration(seconds: 20),
+      onTimeout: () {},
+    );
+  }
+
+  void _completeRefresh() {
+    if (_refreshCompleter?.isCompleted == false) {
+      _refreshCompleter?.complete();
+    }
   }
 
   Future<bool> _handleWillPop() async {
@@ -270,7 +369,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
 
   Future<void> _loadDetailsExpanded(InvoiceTempDto invoice) async {
     final id = invoice.idInvoice;
-    if (_invoiceDetailsCache.containsKey(id)) return; // Đã load rồi thì skip
+    if (_invoiceDetailsCache.containsKey(id)) return;
 
     try {
       final repo = InvoiceDetailTempRepository();
@@ -279,6 +378,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
         idInvoice: id,
       );
 
+      if (!mounted) return;
       setState(() {
         _invoiceDetailsCache[id] = details;
       });
@@ -301,11 +401,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
   }
 
   String _invoiceSearchText(InvoiceTempDto invoice) {
-    final status = invoice.isExporting == true
-        ? 'luu tam dang xuat uu tien'
-        : invoice.isSaved == true
-            ? 'hoan thanh'
-            : 'moi chua xu ly uu tien';
+    final status = _statusOf(invoice);
     return _normalizeSmartText([
       invoice.idInvoice,
       invoice.customerCode,
@@ -318,27 +414,94 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
       invoice.license_plate,
       invoice.note,
       invoice.content,
-      status,
+      _statusSearchTokens(status),
       DateFormat('dd/MM/yyyy').format(invoice.invoiceDate),
       DateFormat('dd/MM/yyyy').format(invoice.delivery_date),
     ].where((e) => e != null).join(' '));
   }
 
-  bool _matchesSmartSearch(InvoiceTempDto invoice) {
-    final query = _normalizeSmartText(_smartSearchQuery);
+  bool _matchesSmartSearch(InvoiceTempDto invoice, String query) {
     if (query.isEmpty) return true;
     final searchable = _invoiceSearchText(invoice);
     final tokens = query.split(RegExp(r'\s+')).where((e) => e.isNotEmpty);
     return tokens.every(searchable.contains);
   }
 
-  int _invoicePriorityScore(InvoiceTempDto invoice) {
+  _InvoiceUiStatus _statusOf(InvoiceTempDto invoice) {
+    if (_pendingSyncInvoices.contains(invoice.idInvoice)) {
+      return _InvoiceUiStatus.pendingSync;
+    }
+    if (invoice.isExporting == true) return _InvoiceUiStatus.temp;
+    if (invoice.isSaved == true) return _InvoiceUiStatus.done;
+    return _InvoiceUiStatus.fresh;
+  }
+
+  String _statusLabel(_InvoiceUiStatus status) {
+    switch (status) {
+      case _InvoiceUiStatus.pendingSync:
+        return 'Chờ đồng bộ';
+      case _InvoiceUiStatus.temp:
+        return 'Lưu tạm';
+      case _InvoiceUiStatus.fresh:
+        return 'Chờ xử lý';
+      case _InvoiceUiStatus.done:
+        return 'Hoàn thành';
+    }
+  }
+
+  Color _statusColor(_InvoiceUiStatus status) {
+    switch (status) {
+      case _InvoiceUiStatus.pendingSync:
+        return Colors.deepOrange;
+      case _InvoiceUiStatus.temp:
+        return Colors.orange;
+      case _InvoiceUiStatus.fresh:
+        return Colors.blueGrey;
+      case _InvoiceUiStatus.done:
+        return Colors.green;
+    }
+  }
+
+  String _statusSearchTokens(_InvoiceUiStatus status) {
+    switch (status) {
+      case _InvoiceUiStatus.pendingSync:
+        return 'cho dong bo pending sync uu tien';
+      case _InvoiceUiStatus.temp:
+        return 'luu tam dang xuat uu tien';
+      case _InvoiceUiStatus.fresh:
+        return 'moi chua xu ly cho xu ly uu tien';
+      case _InvoiceUiStatus.done:
+        return 'hoan thanh da xu ly';
+    }
+  }
+
+  bool _statusMatchesFilter(
+      _InvoiceUiStatus status, _InvoiceStatusFilter filter) {
+    switch (filter) {
+      case _InvoiceStatusFilter.all:
+        return true;
+      case _InvoiceStatusFilter.pendingSync:
+        return status == _InvoiceUiStatus.pendingSync;
+      case _InvoiceStatusFilter.temp:
+        return status == _InvoiceUiStatus.temp;
+      case _InvoiceStatusFilter.fresh:
+        return status == _InvoiceUiStatus.fresh;
+      case _InvoiceStatusFilter.done:
+        return status == _InvoiceUiStatus.done;
+    }
+  }
+
+  bool _matchesStatusFilter(InvoiceTempDto invoice) {
+    return _statusMatchesFilter(_statusOf(invoice), _selectedStatusFilter);
+  }
+
+  int _invoicePriorityScore(InvoiceTempDto invoice, {DateTime? today}) {
     var score = 0;
     final now = DateTime.now();
     final dueDate = DateTime(invoice.delivery_date.year,
         invoice.delivery_date.month, invoice.delivery_date.day);
-    final today = DateTime(now.year, now.month, now.day);
-    final daysToDue = dueDate.difference(today).inDays;
+    final effectiveToday = today ?? DateTime(now.year, now.month, now.day);
+    final daysToDue = dueDate.difference(effectiveToday).inDays;
 
     if (invoice.isExporting == true) score += 1000;
     if (invoice.isSaved != true) score += 600;
@@ -355,30 +518,31 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
   }
 
   String _invoicePriorityLabel(InvoiceTempDto invoice) {
-    final now = DateTime.now();
-    final dueDate = DateTime(invoice.delivery_date.year,
-        invoice.delivery_date.month, invoice.delivery_date.day);
-    final today = DateTime(now.year, now.month, now.day);
-    // final daysToDue = dueDate.difference(today).inDays;
-    if (invoice.isExporting == true) return 'Đang xử lý';
-    // if (daysToDue < 0) return 'Quá hạn giao';
-    // if (daysToDue == 0) return 'Giao hôm nay';
-    // if (daysToDue <= 2) return 'Sắp đến hạn';
-    if (invoice.isSaved != true) return 'Chưa xử lý';
-    return 'Bình thường';
+    return _statusLabel(_statusOf(invoice));
   }
 
   List<MapEntry<String, InvoiceTempDto>> _filterAndPrioritizeInvoices(
       List<MapEntry<String, InvoiceTempDto>> invoices) {
-    final filtered =
-        invoices.where((entry) => _matchesSmartSearch(entry.value)).toList();
+    final query = _normalizeSmartText(_smartSearchQuery);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final filtered = invoices.where((entry) {
+      final invoice = entry.value;
+      return _matchesStatusFilter(invoice) &&
+          _matchesSmartSearch(invoice, query);
+    }).map((entry) {
+      return _ScoredInvoiceEntry(
+        entry: entry,
+        priorityScore: _invoicePriorityScore(entry.value, today: today),
+      );
+    }).toList();
+
     filtered.sort((a, b) {
-      final scoreCompare = _invoicePriorityScore(b.value)
-          .compareTo(_invoicePriorityScore(a.value));
+      final scoreCompare = b.priorityScore.compareTo(a.priorityScore);
       if (scoreCompare != 0) return scoreCompare;
-      return a.value.delivery_date.compareTo(b.value.delivery_date);
+      return a.entry.value.delivery_date.compareTo(b.entry.value.delivery_date);
     });
-    return filtered;
+    return filtered.map((item) => item.entry).toList();
   }
 
   void _showSearchDialog(BuildContext blocContext) {
@@ -602,12 +766,26 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
       child: WillPopScope(
         onWillPop: _handleWillPop,
         child: Scaffold(
-          backgroundColor: const Color(0xFFF5F7FA),
+          backgroundColor: const Color(0xFFF3F6FB),
           appBar: AppBar(
             elevation: 0,
-            backgroundColor: kPrimaryColor,
+            backgroundColor: Colors.transparent,
             foregroundColor: Colors.white,
             centerTitle: true,
+            systemOverlayStyle: SystemUiOverlayStyle.light,
+            flexibleSpace: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    kPrimaryColor,
+                    kPrimaryColor.withOpacity(0.78),
+                    const Color(0xFF0F766E),
+                  ],
+                ),
+              ),
+            ),
             title: Column(
               children: [
                 SizedBox(
@@ -629,6 +807,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                   );
                 },
               ),
+              _buildPendingSyncAction(context),
               Tooltip(
                 message: 'Đăng xuất',
                 child: IconButton(
@@ -641,6 +820,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
           body: BlocListener<InvoiceTempBloc, InvoiceTempState>(
             listener: (context, state) async {
               if (state is InvoiceTempError) {
+                _completeRefresh();
                 Get.snackbar(
                   'Lỗi',
                   'Không thể tải dữ liệu: ${state.message}',
@@ -654,19 +834,19 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                 );
               } else if (state is InvoiceTempLoaded) {
                 await _applyPersistedTempStates(state.invoiceTemps);
-                if (_selectedOrderType == 'GIA_CONG') {
-                  setState(() {
+                if (!mounted) return;
+                _completeRefresh();
+                setState(() {
+                  _lastUpdatedAt = DateTime.now();
+                  if (_selectedOrderType == 'GIA_CONG') {
                     for (var invoice in state.invoiceTemps) {
                       final id = invoice.idInvoice;
-                      _expandedInvoices[id] = true;
-                      _loadDetailsExpanded(invoice);
+                      _expandedInvoices.putIfAbsent(id, () => false);
                     }
-                  });
-                } else {
-                  setState(() {
+                  } else {
                     _expandedInvoices.clear();
-                  });
-                }
+                  }
+                });
                 if (state.invoiceTemps.isEmpty) {
                   if (_selectedOrderType == 'GIA_CONG') {
                     Get.snackbar(
@@ -701,35 +881,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
               },
             ),
           ),
-          bottomNavigationBar: BottomAppBar(
-            color: Colors.white,
-            elevation: 10,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  GestureDetector(
-                    onTap: () {
-                      Get.toNamed(BarcodeScanScreen.routeName);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: kPrimaryColor.withOpacity(0.12),
-                      ),
-                      child: const Icon(
-                        Icons.qr_code_scanner_rounded,
-                        size: 32,
-                        color: kPrimaryColor,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          bottomNavigationBar: _buildBottomScanBar(),
         ),
       ),
     );
@@ -807,12 +959,13 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
         }
       }
       final groupedInvoices = grouped.entries.toList();
+      final statusStats = _buildStatusStats(groupedInvoices);
       final visibleInvoices = _filterAndPrioritizeInvoices(groupedInvoices);
 
       return RefreshIndicator(
         color: kPrimaryColor,
         onRefresh: () async {
-          _refreshInvoiceList(context);
+          await _refreshInvoiceList(context);
         },
         child: ListView.builder(
           padding: const EdgeInsets.all(16),
@@ -824,9 +977,10 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                 children: [
                   _buildOrderTypeFilter(context),
                   _buildSmartSearchBox(),
+                  _buildStatusQuickFilters(statusStats),
                   const SizedBox(height: 10),
                   _buildPrioritySummaryHeader(
-                      groupedInvoices, visibleInvoices.length),
+                      groupedInvoices, visibleInvoices.length, statusStats),
                   const SizedBox(height: 8),
                   if (visibleInvoices.isEmpty) _buildEmptySearchResult(context),
                 ],
@@ -928,22 +1082,122 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
     );
   }
 
+  Widget _buildPendingSyncAction(BuildContext context) {
+    final count = _pendingSyncInvoices.length;
+    return Tooltip(
+      message: count > 0 ? '$count đơn chờ đồng bộ' : 'Đơn chờ đồng bộ',
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.cloud_sync_rounded, size: 24),
+            onPressed: () async {
+              await Get.toNamed(PendingSyncScreen.routeName);
+              _refreshInvoiceList(context);
+            },
+          ),
+          if (count > 0)
+            Positioned(
+              right: 6,
+              top: 7,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.deepOrange,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white, width: 1.2),
+                ),
+                constraints: const BoxConstraints(minWidth: 18),
+                child: Text(
+                  count > 99 ? '99+' : '$count',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomScanBar() {
+    return SafeArea(
+      top: false,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => Get.toNamed(BarcodeScanScreen.routeName),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  kPrimaryColor,
+                  kPrimaryColor.withOpacity(0.82),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.qr_code_scanner_rounded,
+                    size: 24, color: Colors.white),
+                SizedBox(width: 10),
+                Text(
+                  'Quét mã barcode',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildSmartSearchBox() {
     return Container(
       margin: const EdgeInsets.only(top: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: kPrimaryColor.withOpacity(0.14)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: kPrimaryColor.withOpacity(0.10)),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12)
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          )
         ],
       ),
       child: TextField(
         controller: _smartSearchCtrl,
         textInputAction: TextInputAction.search,
-        onChanged: (value) => setState(() => _smartSearchQuery = value),
+        onChanged: _onSmartSearchChanged,
+        onSubmitted: _commitSmartSearch,
         decoration: InputDecoration(
           border: InputBorder.none,
           icon: const Icon(Icons.manage_search_rounded, color: kPrimaryColor),
@@ -954,6 +1208,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
               : IconButton(
                   icon: const Icon(Icons.close_rounded, size: 18),
                   onPressed: () {
+                    _smartSearchDebounce?.cancel();
                     _smartSearchCtrl.clear();
                     setState(() => _smartSearchQuery = '');
                   },
@@ -963,31 +1218,84 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
     );
   }
 
-  Widget _buildPrioritySummaryHeader(
-      List<MapEntry<String, InvoiceTempDto>> invoices, int visibleCount) {
-    final exportingCount =
-        invoices.where((e) => e.value.isExporting == true).length;
-    final newCount = invoices
-        .where((e) => e.value.isExporting != true && e.value.isSaved != true)
-        .length;
-    final today = DateTime.now();
-    final todayOnly = DateTime(today.year, today.month, today.day);
-    final dueSoonCount = invoices.where((entry) {
-      final d = entry.value.delivery_date;
-      final due = DateTime(d.year, d.month, d.day);
-      return due.difference(todayOnly).inDays <= 2 &&
-          entry.value.isSaved != true;
-    }).length;
-
+  Widget _buildStatusQuickFilters(_InvoiceStatusStats stats) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(14),
+      height: 42,
+      margin: const EdgeInsets.only(top: 10),
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          _buildStatusFilterChip(
+              _InvoiceStatusFilter.all, 'Tất cả', stats, kPrimaryColor),
+          _buildStatusFilterChip(_InvoiceStatusFilter.pendingSync, 'Chờ sync',
+              stats, Colors.deepOrange),
+          _buildStatusFilterChip(
+              _InvoiceStatusFilter.temp, 'Lưu tạm', stats, Colors.orange),
+          _buildStatusFilterChip(
+              _InvoiceStatusFilter.fresh, 'Chờ xử lý', stats, Colors.blueGrey),
+          _buildStatusFilterChip(
+              _InvoiceStatusFilter.done, 'Hoàn thành', stats, Colors.green),
+        ],
+      ),
+    );
+  }
+
+  _InvoiceStatusStats _buildStatusStats(
+      List<MapEntry<String, InvoiceTempDto>> invoices) {
+    final stats = _InvoiceStatusStats();
+    for (final entry in invoices) {
+      stats.add(_statusOf(entry.value));
+    }
+    return stats;
+  }
+
+  Widget _buildStatusFilterChip(_InvoiceStatusFilter value, String label,
+      _InvoiceStatusStats stats, Color color) {
+    final selected = _selectedStatusFilter == value;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        selected: selected,
+        label: Text('$label (${stats.countFor(value)})'),
+        selectedColor: color.withOpacity(0.16),
+        backgroundColor: Colors.white,
+        side: BorderSide(
+          color: selected ? color.withOpacity(0.55) : Colors.grey.shade200,
+        ),
+        labelStyle: TextStyle(
+          color: selected ? color : Colors.grey.shade700,
+          fontSize: 12,
+          fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+        ),
+        onSelected: (_) => setState(() => _selectedStatusFilter = value),
+      ),
+    );
+  }
+
+  Widget _buildPrioritySummaryHeader(
+      List<MapEntry<String, InvoiceTempDto>> invoices,
+      int visibleCount,
+      _InvoiceStatusStats stats) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.orange.withOpacity(0.14)),
+        borderRadius: BorderRadius.circular(24),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white,
+            kPrimaryColor.withOpacity(0.06),
+          ],
+        ),
+        border: Border.all(color: Colors.white.withOpacity(0.85), width: 1.2),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12)
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          )
         ],
       ),
       child: Column(
@@ -998,11 +1306,11 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
+                  color: kPrimaryColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 child:
-                    const Icon(Icons.inventory_outlined, color: Colors.orange),
+                    const Icon(Icons.inventory_outlined, color: kPrimaryColor),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1011,28 +1319,34 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                   children: [
                     Text(
                       _smartSearchQuery.trim().isEmpty
-                          ? '${invoices.length} phiếu trong danh sách '
-                          : '$visibleCount/${invoices.length} phiếu phù hợp',
+                          ? '${invoices.length} đơn trong danh sách'
+                          : '$visibleCount/${invoices.length} đơn phù hợp',
                       style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
                           color: Color(0xFF1F2937)),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Ưu tiên: đang xử lý, chưa xử lý',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.grey.shade600),
-                    ),
+                    // const SizedBox(height: 2),
+                    // Text(
+                    //   'Ưu tiên: đang xử lý, chưa xử lý',
+                    //   style: TextStyle(
+                    //       fontSize: 12,
+                    //       fontWeight: FontWeight.w500,
+                    //       color: Colors.grey.shade600),
+                    // ),
                   ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Làm mới',
-                onPressed: () => _refreshInvoiceList(context),
-                icon: const Icon(Icons.refresh_rounded, color: kPrimaryColor),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: IconButton(
+                  tooltip: 'Làm mới',
+                  onPressed: () => _refreshInvoiceList(context),
+                  icon: const Icon(Icons.refresh_rounded, color: kPrimaryColor),
+                ),
               ),
             ],
           ),
@@ -1041,34 +1355,58 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
             children: [
               Expanded(
                   child: _buildPriorityMetric(
-                      'Đang xử lý', '$exportingCount', Colors.orange)),
+                      'Chờ sync', '${stats.pendingSync}', Colors.deepOrange)),
               const SizedBox(width: 8),
               Expanded(
                   child: _buildPriorityMetric(
-                      'Chưa xử lý', '$dueSoonCount', Colors.redAccent)),
+                      'Lưu tạm', '${stats.temp}', Colors.orange)),
               const SizedBox(width: 8),
               Expanded(
-                  child:
-                      _buildPriorityMetric('Mới', '$newCount', kPrimaryColor)),
+                  child: _buildPriorityMetric(
+                      'Chờ xử lý', '${stats.fresh}', kPrimaryColor)),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: _buildPriorityMetric(
+                      'Hoàn thành', '${stats.done}', Colors.green)),
             ],
           ),
           const SizedBox(height: 10),
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 6,
             children: [
-              Icon(Icons.date_range_rounded,
-                  size: 15, color: Colors.grey.shade600),
-              const SizedBox(width: 6),
-              Text(
+              _buildSummaryMeta(
+                Icons.date_range_rounded,
                 '${DateFormat('dd/MM/yyyy').format(selectedStartDate)} - ${DateFormat('dd/MM/yyyy').format(selectedEndDate)}',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey.shade600),
+              ),
+              _buildSummaryMeta(
+                Icons.update_rounded,
+                _lastUpdatedAt == null
+                    ? 'Chưa cập nhật'
+                    : 'Cập nhật ${DateFormat('HH:mm dd/MM').format(_lastUpdatedAt!)}',
               ),
             ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildSummaryMeta(IconData icon, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: Colors.grey.shade600),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey.shade600,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1118,6 +1456,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
           const SizedBox(height: 8),
           TextButton(
             onPressed: () {
+              _smartSearchDebounce?.cancel();
               _smartSearchCtrl.clear();
               setState(() => _smartSearchQuery = '');
             },
@@ -1128,75 +1467,92 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
     );
   }
 
+  Future<void> _openInvoiceTemp(InvoiceTempDto invoice) async {
+    final result =
+        await Get.toNamed(InvoiceTempScreen.routeName, arguments: invoice);
+
+    if (result != null && result is Map<String, dynamic>) {
+      final String action = result['action'] ?? 'cancel';
+
+      if (action == 'temp_saved') {
+        await _setPersistedTempState(invoice.idInvoice, true);
+        if (!mounted) return;
+        setState(() {
+          invoice.isExporting = true;
+          invoice.isSaved = false;
+        });
+      } else if (action == 'completed') {
+        await _setPersistedTempState(invoice.idInvoice, false);
+        if (!mounted) return;
+        setState(() {
+          _pendingSyncInvoices.remove(invoice.idInvoice);
+          invoice.isExporting = false;
+          invoice.isSaved = true;
+        });
+      } else if (action == 'pending_sync') {
+        await _setPersistedTempState(invoice.idInvoice, true);
+        if (!mounted) return;
+        setState(() {
+          _pendingSyncInvoices.add(invoice.idInvoice);
+          invoice.isExporting = true;
+          invoice.isSaved = false;
+        });
+      }
+    }
+  }
+
   Widget _buildInvoiceCard(
       BuildContext context, MapEntry<String, InvoiceTempDto> group) {
     final invoice = group.value;
     final isGiaCong = _selectedOrderType == 'GIA_CONG';
     final isExpanded = _expandedInvoices[invoice.idInvoice] ?? true;
-    final isTempSaved = invoice.isExporting == true;
-    final isCompleted = !isTempSaved && invoice.isSaved == true;
-    final accentColor = isTempSaved
-        ? Colors.orange
-        : isCompleted
-            ? Colors.green
-            : kPrimaryColor;
-    final backgroundColor = isTempSaved
+    final status = _statusOf(invoice);
+    final priorityScore = _invoicePriorityScore(invoice);
+    final accentColor =
+        status == _InvoiceUiStatus.fresh ? kPrimaryColor : _statusColor(status);
+    final backgroundColor = status == _InvoiceUiStatus.temp
         ? Colors.orange.shade50
-        : isCompleted
+        : status == _InvoiceUiStatus.done
             ? Colors.green.shade50
-            : Colors.white;
+            : status == _InvoiceUiStatus.pendingSync
+                ? Colors.deepOrange.shade50
+                : Colors.white;
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+      margin: const EdgeInsets.symmetric(vertical: 9, horizontal: 2),
       decoration: BoxDecoration(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: accentColor.withOpacity(0.18), width: 1.2),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: accentColor.withOpacity(0.16), width: 1.1),
         boxShadow: [
           BoxShadow(
             color: accentColor
-                .withOpacity(isTempSaved || isCompleted ? 0.14 : 0.06),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
+                .withOpacity(status == _InvoiceUiStatus.fresh ? 0.07 : 0.13),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
       child: Column(
         children: [
+          Container(
+            height: 5,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  accentColor,
+                  accentColor.withOpacity(0.35),
+                ],
+              ),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+          ),
           InkWell(
-            borderRadius: BorderRadius.circular(18),
-            onTap: () async {
-              final result = await Get.toNamed(InvoiceTempScreen.routeName,
-                  arguments: invoice);
-
-              if (result != null && result is Map<String, dynamic>) {
-                final String action = result['action'] ?? 'cancel';
-
-                if (action == 'temp_saved') {
-                  await _setPersistedTempState(invoice.idInvoice, true);
-                  setState(() {
-                    invoice.isExporting = true;
-                    invoice.isSaved = false;
-                  });
-                } else if (action == 'completed') {
-                  await _setPersistedTempState(invoice.idInvoice, false);
-                  setState(() {
-                    _pendingSyncInvoices.remove(invoice.idInvoice);
-                    invoice.isExporting = false;
-                    invoice.isSaved = true;
-                  });
-                } else if (action == 'pending_sync') {
-                  await _setPersistedTempState(invoice.idInvoice, true);
-                  setState(() {
-                    _pendingSyncInvoices.add(invoice.idInvoice);
-                    invoice.isExporting = true;
-                    invoice.isSaved = false;
-                  });
-                }
-              }
-            },
+            borderRadius: BorderRadius.circular(24),
+            onTap: () => _openInvoiceTemp(invoice),
             child: Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1204,13 +1560,13 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(11),
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: accentColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(16),
                         ),
                         child: Icon(Icons.receipt_long_rounded,
-                            color: accentColor, size: 24),
+                            color: accentColor, size: 25),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -1220,8 +1576,8 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                             Text(
                               invoice.orderVoucher ?? 'Chưa có mã đơn',
                               style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w800,
+                                fontSize: 15.5,
+                                fontWeight: FontWeight.w900,
                                 color: Colors.grey.shade900,
                               ),
                               overflow: TextOverflow.ellipsis,
@@ -1231,7 +1587,7 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                             Text(
                               invoice.customerName ?? 'Chưa có khách hàng',
                               style: TextStyle(
-                                fontSize: 12.5,
+                                fontSize: 13,
                                 height: 1.3,
                                 color: Colors.grey.shade700,
                                 fontWeight: FontWeight.w500,
@@ -1254,9 +1610,9 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                       _buildInvoiceInfoChip(
                         icon: Icons.pending_actions,
                         label: _invoicePriorityLabel(invoice),
-                        color: _invoicePriorityScore(invoice) >= 900
+                        color: priorityScore >= 900
                             ? Colors.orange
-                            : _invoicePriorityScore(invoice) >= 600
+                            : priorityScore >= 600
                                 ? kPrimaryColor
                                 : Colors.blueGrey,
                       ),
@@ -1275,6 +1631,8 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
                         ),
                     ],
                   ),
+                  const SizedBox(height: 12),
+                  _buildInvoiceQuickAction(context, invoice, accentColor),
                 ],
               ),
             ),
@@ -1317,24 +1675,62 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
     );
   }
 
+  Widget _buildInvoiceQuickAction(
+      BuildContext context, InvoiceTempDto invoice, Color color) {
+    final status = _statusOf(invoice);
+    final label = status == _InvoiceUiStatus.pendingSync
+        ? 'Mở đồng bộ'
+        : status == _InvoiceUiStatus.done
+            ? 'Xem chi tiết'
+            : 'Xử lý ngay';
+    final icon = status == _InvoiceUiStatus.pendingSync
+        ? Icons.cloud_upload_rounded
+        : status == _InvoiceUiStatus.done
+            ? Icons.visibility_rounded
+            : Icons.play_arrow_rounded;
+
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Material(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () async {
+            if (status == _InvoiceUiStatus.pendingSync) {
+              await Get.toNamed(PendingSyncScreen.routeName);
+              _refreshInvoiceList(context);
+              return;
+            }
+            await _openInvoiceTemp(invoice);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: color, size: 16),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildInvoiceStatusChip(InvoiceTempDto invoice) {
-    final isPendingSync = _pendingSyncInvoices.contains(invoice.idInvoice);
-    final isTempSaved = invoice.isExporting == true;
-    final isCompleted = !isTempSaved && invoice.isSaved == true;
-    final color = isPendingSync
-        ? Colors.deepOrange
-        : isTempSaved
-            ? Colors.orange
-            : isCompleted
-                ? Colors.green
-                : Colors.blueGrey;
-    final label = isPendingSync
-        ? 'Chờ đồng bộ'
-        : isTempSaved
-            ? 'Lưu tạm'
-            : isCompleted
-                ? 'Hoàn thành'
-                : 'Mới';
+    final status = _statusOf(invoice);
+    final color = _statusColor(status);
+    final label = _statusLabel(status);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2000,16 +2396,17 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
 
   Widget _buildOrderTypeFilter(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(4),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withOpacity(0.9)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -2050,10 +2447,28 @@ class _HomeInvoiceScreenState extends State<HomeInvoiceScreen> {
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 10),
           decoration: BoxDecoration(
-            color: isSelected ? kPrimaryColor : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
+            gradient: isSelected
+                ? LinearGradient(
+                    colors: [
+                      kPrimaryColor,
+                      kPrimaryColor.withOpacity(0.78),
+                    ],
+                  )
+                : null,
+            color: isSelected ? null : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: kPrimaryColor.withOpacity(0.18),
+                      blurRadius: 12,
+                      offset: const Offset(0, 5),
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,

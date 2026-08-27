@@ -10,6 +10,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:invoice_management/screens/invoice_screen/barcode_screens/barcode_screen.dart';
 import 'package:invoice_management/screens/invoice_screen/core/invoice_detail_temp_bloc.dart';
 import 'package:invoice_management/screens/invoice_screen/core/invoice_temp_bloc.dart';
+import 'package:invoice_management/screens/invoice_screen/pending_sync_screen.dart';
 import 'package:invoice_management/screens/invoice_screen/repository/invoice_detail_temp_repository.dart';
 import 'package:invoice_management/screens/invoice_screen/repository/invoice_temp_repository.dart';
 import 'package:invoice_management/screens/invoice_screen/screens/invoice_screen.dart';
@@ -148,6 +149,7 @@ class _InvoiceManagementAppState extends State<InvoiceManagementApp> {
           GetPage(name: InvoiceTempScreen.routeName, page: () => InvoiceTempScreen()),
           GetPage(name: LoginScreen.routeName, page: () => LoginScreen()),
           GetPage(name: BarcodeScanScreen.routeName, page: () => const BarcodeScanScreen()),
+          GetPage(name: PendingSyncScreen.routeName, page: () => const PendingSyncScreen()),
         ],
         initialRoute: LoginScreen.routeName,
         onGenerateRoute: RouteSettingsWithArguments.generateRoute,
